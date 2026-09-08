@@ -6,6 +6,8 @@ from pathlib import Path
 from artificial_ecology.domain import ActionProposal, Inhabitant, Position, World
 from artificial_ecology.engine import SimulationEngine
 from artificial_ecology.persistence import SQLiteStore
+from artificial_ecology.observer import ObserverView
+from artificial_ecology.runtime import OllamaController, ScriptedController, SimulationRunner
 
 
 def make_engine(seed: int = 7) -> SimulationEngine:
@@ -23,6 +25,16 @@ def make_engine(seed: int = 7) -> SimulationEngine:
 
 
 class SimulationEngineTests(unittest.TestCase):
+    def test_runner_decides_after_needs_advance(self) -> None:
+        engine = make_engine()
+        controller = ScriptedController({1: {"a": ActionProposal.eat("a")}})
+
+        result = SimulationRunner(engine, controller).run_tick()
+
+        self.assertEqual(result.tick, 1)
+        self.assertEqual(result.perceptions["a"]["tick"], 1)
+        self.assertEqual(result.events[-1].event_type, "action_succeeded")
+
     def test_valid_move_changes_world_and_emits_event(self) -> None:
         engine = make_engine()
         events = engine.step([ActionProposal.move("a", Position(1, 2))])
@@ -55,6 +67,14 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertFalse(engine.world.inhabitants["a"].alive)
         self.assertEqual(events[0].event_type, "inhabitant_died")
 
+        later_events = engine.step()
+
+        self.assertFalse(later_events)
+        self.assertEqual(
+            len([event for event in engine.events if event.event_type == "inhabitant_died"]),
+            1,
+        )
+
     def test_snapshot_restores_world_and_random_state(self) -> None:
         engine = make_engine(seed=11)
         engine.step([ActionProposal.move("a", Position(1, 2))])
@@ -80,6 +100,25 @@ class SimulationEngineTests(unittest.TestCase):
 
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0], 1)
+
+    def test_ollama_response_becomes_action_proposal(self) -> None:
+        response = b'{"message":{"content":"{\\"action_type\\":\\"move\\",\\"target_x\\":2,\\"target_y\\":1,\\"recipient_id\\":null,\\"message\\":null}"}}'
+        controller = OllamaController(transport=lambda url, body, timeout: response)
+
+        proposal = controller.decide("a", {"tick": 1})
+
+        self.assertEqual(proposal, ActionProposal.move("a", Position(2, 1)))
+
+    def test_observer_view_is_read_only_and_contains_world_and_events(self) -> None:
+        engine = make_engine()
+        engine.step([ActionProposal.eat("a")])
+        view = ObserverView(engine)
+
+        state = view.state()
+
+        self.assertEqual(state["world"]["tick"], 1)
+        self.assertEqual(len(state["events"]), 1)
+        self.assertEqual(engine.world.inhabitants["a"].hunger, 0)
 
 
 if __name__ == "__main__":

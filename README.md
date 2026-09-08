@@ -14,3 +14,14 @@ The project direction and design constraints live in [`docs/`](docs/README.md). 
 - [Architecture](docs/ARCHITECTURE.md) — responsibilities and information flow
 - [Roadmap](docs/ROADMAP.md) — staged development plan
 - [Experiments](docs/EXPERIMENTS.md) — how to evaluate emergence without scripting conclusions
+
+## Run the core demo
+
+From WSL:
+
+```bash
+python3 -m unittest discover -v
+python3 -m artificial_ecology.demo
+```
+
+Open `http://127.0.0.1:8000` in a browser to view the live deterministic demo. The Ollama controller uses the Windows Ollama API at `http://localhost:11434`.

@@ -38,12 +38,14 @@ class SimulationEngine:
         self._next_sequence = 1
         self.events: list[Event] = []
 
-    def step(self, proposals: Iterable[ActionProposal] = ()) -> tuple[Event, ...]:
-        """Advance exactly one tick and return events emitted during that tick."""
+    def advance(self) -> tuple[Event, ...]:
+        """Advance environmental effects and needs to the decision barrier."""
         self.world.tick += 1
         emitted: list[Event] = []
 
         for inhabitant in sorted(self.world.inhabitants.values(), key=lambda item: item.id):
+            if not inhabitant.alive:
+                continue
             inhabitant.increase_needs()
             critical_need = inhabitant.critical_need()
             if critical_need:
@@ -53,6 +55,12 @@ class SimulationEngine:
                     "cause": critical_need,
                 }))
 
+        self.events.extend(emitted)
+        return tuple(emitted)
+
+    def resolve(self, proposals: Iterable[ActionProposal] = ()) -> tuple[Event, ...]:
+        """Resolve proposals against the current decision-barrier world state."""
+        emitted: list[Event] = []
         valid_proposals = [proposal for proposal in proposals if proposal.actor_id in self.world.inhabitants]
         ordered_proposals = list(valid_proposals)
         self._random.shuffle(ordered_proposals)
@@ -61,6 +69,10 @@ class SimulationEngine:
 
         self.events.extend(emitted)
         return tuple(emitted)
+
+    def step(self, proposals: Iterable[ActionProposal] = ()) -> tuple[Event, ...]:
+        """Advance exactly one tick and resolve proposals immediately."""
+        return self.advance() + self.resolve(proposals)
 
     def perceive(self, inhabitant_id: str, radius: int = 3) -> dict[str, Any]:
         inhabitant = self._require_inhabitant(inhabitant_id)
