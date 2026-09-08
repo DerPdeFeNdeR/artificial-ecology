@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Runtime and experiment output
+*.sqlite3
+*.db
+data/
+runs/
+artifacts/
+
+# Local environment and editor files
+.env
+.DS_Store
+.vscode/
+.idea/
