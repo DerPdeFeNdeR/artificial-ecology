@@ -25,3 +25,5 @@ python3 -m artificial_ecology.demo
 ```
 
 Open `http://127.0.0.1:8000` in a browser to view the live deterministic demo. The Ollama controller uses the Windows Ollama API at `http://localhost:11434`.
+
+The demo records each run in `runs/demo.sqlite3` (ignored by Git), including the initial snapshot, per-tick snapshots, events, and scripted decisions.

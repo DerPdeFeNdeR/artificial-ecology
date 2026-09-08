@@ -5,7 +5,7 @@ from pathlib import Path
 
 from artificial_ecology.domain import ActionProposal, Inhabitant, Position, World
 from artificial_ecology.engine import SimulationEngine
-from artificial_ecology.persistence import SQLiteStore
+from artificial_ecology.persistence import SQLiteStore, verify_replay
 from artificial_ecology.observer import ObserverView
 from artificial_ecology.runtime import OllamaController, ScriptedController, SimulationRunner
 
@@ -100,6 +100,23 @@ class SimulationEngineTests(unittest.TestCase):
 
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0], 1)
+
+    def test_sqlite_replays_recorded_decisions(self) -> None:
+        engine = make_engine(seed=7)
+        controller = ScriptedController({1: {"a": ActionProposal.eat("a")}})
+        runner = SimulationRunner(engine, controller)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteStore(Path(directory) / "run.sqlite3")
+            store.create_run("run-1", seed=7, metadata={"scenario": "replay"})
+            store.save_initial_snapshot("run-1", engine)
+            result = runner.run_tick()
+            store.save_tick("run-1", engine, result.events, result.proposals)
+
+            replayed = verify_replay(store, "run-1")
+
+            self.assertEqual(replayed.snapshot(), engine.snapshot())
+            store.close()
 
     def test_ollama_response_becomes_action_proposal(self) -> None:
         response = b'{"message":{"content":"{\\"action_type\\":\\"move\\",\\"target_x\\":2,\\"target_y\\":1,\\"recipient_id\\":null,\\"message\\":null}"}}'

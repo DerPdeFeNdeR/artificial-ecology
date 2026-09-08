@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from threading import Thread
 
 from .domain import ActionProposal, Inhabitant, Position, World
 from .engine import SimulationEngine
 from .observer import create_server
+from .persistence import SQLiteStore
 from .runtime import SimulationRunner
 
 
@@ -78,19 +81,26 @@ def create_demo_engine() -> SimulationEngine:
 def main() -> None:
     engine = create_demo_engine()
     runner = SimulationRunner(engine, DemoController())
+    Path("runs").mkdir(exist_ok=True)
+    run_id = datetime.now(timezone.utc).strftime("demo-%Y%m%dT%H%M%SZ")
+    store = SQLiteStore(Path("runs") / "demo.sqlite3")
+    store.create_run(run_id, seed=11, metadata={"scenario": "scripted_observer_demo"})
+    store.save_initial_snapshot(run_id, engine)
     server = create_server(engine)
     server_thread = Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     print("Observer available at http://127.0.0.1:8000")
     try:
         while True:
-            runner.run_tick()
+            result = runner.run_tick()
+            store.save_tick(run_id, engine, result.events, result.proposals)
             time.sleep(1)
     except KeyboardInterrupt:
         print("Stopping observer")
     finally:
         server.shutdown()
         server.server_close()
+        store.close()
 
 
 if __name__ == "__main__":
