@@ -36,3 +36,9 @@ Clean code is not code with the fewest lines. Prefer readability, cohesion, test
 - Add or update tests when behavior changes.
 - Verify the result with the narrowest relevant checks, then report what was verified.
 - State assumptions briefly when they matter.
+
+## Application review before commits
+
+- When a change affects a runnable application, offer the user an opportunity to run and review it before committing.
+- If the user agrees, run the application and wait for their review before committing.
+- If the user declines or the change is non-interactive, continue with verification and commit normally.

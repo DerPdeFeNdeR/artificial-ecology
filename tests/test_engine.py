@@ -74,6 +74,12 @@ class SimulationEngineTests(unittest.TestCase):
             len([event for event in engine.events if event.event_type == "inhabitant_died"]),
             1,
         )
+        self.assertFalse(engine.is_extinct)
+
+        engine.world.inhabitants["b"].hunger = 100
+        engine.step()
+
+        self.assertTrue(engine.is_extinct)
 
     def test_snapshot_restores_world_and_random_state(self) -> None:
         engine = make_engine(seed=11)

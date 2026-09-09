@@ -91,10 +91,11 @@ def main() -> None:
     server_thread.start()
     print("Observer available at http://127.0.0.1:8000")
     try:
-        while True:
+        while not engine.is_extinct:
             result = runner.run_tick()
             store.save_tick(run_id, engine, result.events, result.proposals)
             time.sleep(1)
+        print("Simulation ended: no living inhabitants")
     except KeyboardInterrupt:
         print("Stopping observer")
     finally:

@@ -58,6 +58,10 @@ class SimulationEngine:
         self.events.extend(emitted)
         return tuple(emitted)
 
+    @property
+    def is_extinct(self) -> bool:
+        return not any(inhabitant.alive for inhabitant in self.world.inhabitants.values())
+
     def resolve(self, proposals: Iterable[ActionProposal] = ()) -> tuple[Event, ...]:
         """Resolve proposals against the current decision-barrier world state."""
         emitted: list[Event] = []
