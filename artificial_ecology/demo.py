@@ -108,7 +108,14 @@ def main() -> None:
         return engine
 
     def record_tick(engine, result):
-        store.save_tick(run_id["value"], engine, result.events, result.proposals, result.model_calls)
+        store.save_tick(
+            run_id["value"],
+            engine,
+            result.events,
+            result.proposals,
+            result.model_calls,
+            result.intention_events,
+        )
 
     session = SimulationSession(
         create_recorded_engine,

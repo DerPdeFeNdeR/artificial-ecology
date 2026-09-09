@@ -20,14 +20,14 @@ The motivation layer gives small local models enough primitive pressure to explo
 
 - Instinct strengths are serialized with inhabitants and can later become heritable traits.
 - Homeostatic need values remain distinct from beliefs, desires, plans, and world truth.
-- Repeated no-action decisions increase exploration pressure; the model remains responsible for choosing whether and where to move.
+- Repeated no-action decisions increase exploration pressure; the model normally remains responsible for choosing whether and where to move.
 - After one repeated no-action decision, the runtime may propose a safe exploratory move when no resource is visible. This is recorded as innate_exploration and remains subject to engine validation.
 - Failed actions remain evidence for danger avoidance rather than hidden prohibitions.
 - Raw signals, senders, recipients, interpretations, and confidence are observable and replayable.
 - Natural-language speech proposals are rejected by the authoritative engine.
 - Each inhabitant maintains spatial memory with visited locations, observed resource presence or absence, confidence, source, and observation age. Old observations become eligible for reconsideration.
-- Homeostatic reflexes may eat or drink when a matching resource is at the current location, or move one legal step toward a visible resource when needs are elevated.
-- A model-selected distant movement target is treated as an intention and translated into one adjacent primitive step before engine validation.
+- Homeostatic reflexes may eat or drink when a matching resource is at the current location. They do not navigate to resources on the model's behalf.
+- A model-selected distant movement target becomes a persistent intention. The runtime translates it into one adjacent primitive step per tick until completion, failure, or interruption.
 
 ## Falsifiable experiments
 

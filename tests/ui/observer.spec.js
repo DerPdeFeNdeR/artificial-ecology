@@ -51,6 +51,7 @@ test.describe('observer layout and controls', () => {
     await expect(page.locator('.inspector')).toContainText('perception');
     await page.getByRole('tab', { name: 'Decisions' }).click();
     await expect(page.locator('.inspector')).toContainText('DESIRES');
+    await expect(page.locator('.inspector')).toContainText('INTENTION');
 
     await page.getByRole('button', { name: 'Stop' }).click();
     await expect(page.locator('#meta')).toContainText('STATUS stopped');

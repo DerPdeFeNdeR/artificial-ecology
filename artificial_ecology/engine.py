@@ -109,6 +109,7 @@ class SimulationEngine:
 
         return {
             "tick": self.world.tick,
+            "bounds": {"width": self.world.width, "height": self.world.height},
             "self": {
                 "id": inhabitant.id,
                 "name": inhabitant.name,
@@ -238,6 +239,7 @@ class SimulationEngine:
             "action_type": proposal.action_type,
             "decision_source": proposal.decision_source,
             "plan_id": proposal.plan_id,
+            "intention_id": proposal.intention_id,
             **details,
         })
 
@@ -247,6 +249,7 @@ class SimulationEngine:
             "action_type": proposal.action_type,
             "decision_source": proposal.decision_source,
             "plan_id": proposal.plan_id,
+            "intention_id": proposal.intention_id,
             "reason": reason,
         })
 

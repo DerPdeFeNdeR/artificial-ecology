@@ -26,6 +26,7 @@ class ActionProposal:
     message: str | None = None
     decision_source: str = "controller"
     plan_id: str | None = None
+    intention_id: str | None = None
 
     @classmethod
     def move(cls, actor_id: str, target: Position) -> "ActionProposal":
@@ -56,6 +57,7 @@ class ActionProposal:
             "message": self.message,
             "decision_source": self.decision_source,
             "plan_id": self.plan_id,
+            "intention_id": self.intention_id,
         }
 
 
@@ -73,6 +75,7 @@ class Inhabitant:
     beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
     desires: dict[str, int] = field(default_factory=dict)
     current_plan: list[dict[str, Any]] = field(default_factory=list)
+    current_intention: dict[str, Any] | None = None
     last_decision: dict[str, Any] | None = None
     perception_history: list[dict[str, Any]] = field(default_factory=list)
     instincts: dict[str, float] = field(default_factory=lambda: {
@@ -111,6 +114,7 @@ class Inhabitant:
             "beliefs": dict(self.beliefs),
             "desires": dict(self.desires),
             "current_plan": list(self.current_plan),
+            "current_intention": self.current_intention,
             "last_decision": self.last_decision,
             "perception_history": list(self.perception_history),
             "instincts": dict(self.instincts),
@@ -134,6 +138,7 @@ class Inhabitant:
             beliefs=dict(data.get("beliefs", {})),
             desires=dict(data.get("desires", {})),
             current_plan=list(data.get("current_plan", [])),
+            current_intention=data.get("current_intention"),
             last_decision=data.get("last_decision"),
             perception_history=list(data.get("perception_history", [])),
             instincts=dict(data.get("instincts", {

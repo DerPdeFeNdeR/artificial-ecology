@@ -8,10 +8,12 @@ import unittest
 from pathlib import Path
 
 from artificial_ecology.domain import ActionProposal, Inhabitant, Position, World
+from artificial_ecology.analysis import summarize_intentions
 from artificial_ecology.engine import SimulationEngine
+from artificial_ecology.evaluation import evaluate_intention_controller
 from artificial_ecology.persistence import SQLiteStore, verify_replay
 from artificial_ecology.observer import INDEX_HTML, ObserverView, create_server
-from artificial_ecology.runtime import OllamaController, PlanProposal, ScriptedController, SimulationRunner, SimulationSession
+from artificial_ecology.runtime import IntentionProposal, OllamaController, PlanProposal, ScriptedController, SimulationRunner, SimulationSession
 
 
 def make_engine(seed: int = 7) -> SimulationEngine:
@@ -189,13 +191,138 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(move.event_type, "action_succeeded")
         self.assertEqual(move.payload["to"], {"x": 1, "y": 2})
 
+    def test_move_intention_persists_until_destination_is_reached(self) -> None:
+        decisions = []
+
+        class IntentionController:
+            decision_source = "model_decision"
+
+            def decide(self, inhabitant_id, perception):
+                decisions.append((inhabitant_id, perception["tick"]))
+                if inhabitant_id == "a":
+                    return IntentionProposal("a", "move_to", target=Position(1, 4))
+                return IntentionProposal(inhabitant_id, "wait")
+
+        engine = make_engine()
+        runner = SimulationRunner(engine, IntentionController())
+
+        first = runner.run_tick()
+        second = runner.run_tick()
+        third = runner.run_tick()
+
+        self.assertEqual([item for item in decisions if item[0] == "a"], [("a", 1)])
+        self.assertEqual(first.proposals[0].decision_source, "model_intention")
+        self.assertEqual(second.proposals[0].decision_source, "intention_continuation")
+        self.assertEqual(first.proposals[0].intention_id, second.proposals[0].intention_id)
+        self.assertEqual(engine.world.inhabitants["a"].position, Position(1, 4))
+        self.assertEqual(engine.world.inhabitants["a"].current_intention["status"], "succeeded")
+        self.assertEqual(third.events[-1].payload["intention_id"], first.proposals[0].intention_id)
+
+    def test_consume_intention_becomes_engine_validated_action(self) -> None:
+        class IntentionController:
+            def decide(self, inhabitant_id, perception):
+                if inhabitant_id == "a":
+                    return IntentionProposal("a", "consume", resource_type="food")
+                return IntentionProposal(inhabitant_id, "wait")
+
+        engine = make_engine()
+        engine.world.inhabitants["a"].hunger = 10
+        result = SimulationRunner(engine, IntentionController()).run_tick()
+
+        event = next(event for event in result.events if event.payload.get("actor_id") == "a")
+        self.assertEqual(event.payload["action_type"], "eat")
+        self.assertEqual(event.payload["decision_source"], "model_intention")
+        self.assertEqual(engine.world.inhabitants["a"].current_intention["status"], "succeeded")
+
+    def test_active_intention_survives_snapshot_restoration(self) -> None:
+        class IntentionController:
+            def decide(self, inhabitant_id, perception):
+                if inhabitant_id == "a":
+                    return IntentionProposal("a", "move_to", target=Position(1, 4))
+                return IntentionProposal(inhabitant_id, "wait")
+
+        engine = make_engine()
+        SimulationRunner(engine, IntentionController()).run_tick()
+        restored = SimulationEngine.from_snapshot(engine.snapshot())
+
+        result = SimulationRunner(restored, IntentionController()).run_tick()
+
+        move = next(proposal for proposal in result.proposals if proposal.actor_id == "a")
+        self.assertEqual(move.decision_source, "intention_continuation")
+        self.assertEqual(move.target, Position(1, 3))
+
+    def test_move_intention_is_interrupted_after_no_progress(self) -> None:
+        decisions = []
+
+        class BlockedController:
+            def decide(self, inhabitant_id, perception):
+                decisions.append((inhabitant_id, perception["tick"]))
+                if inhabitant_id == "a":
+                    return IntentionProposal("a", "move_to", target=Position(2, 1))
+                return IntentionProposal(inhabitant_id, "wait")
+
+        engine = make_engine()
+        runner = SimulationRunner(engine, BlockedController())
+
+        for _ in range(4):
+            runner.run_tick()
+
+        inhabitant = engine.world.inhabitants["a"]
+        self.assertEqual(inhabitant.current_intention["created_tick"], 4)
+        self.assertIn(("a", 4), decisions)
+
+    def test_death_interrupts_an_active_intention(self) -> None:
+        class IntentionController:
+            def decide(self, inhabitant_id, perception):
+                if inhabitant_id == "a":
+                    return IntentionProposal("a", "move_to", target=Position(4, 4))
+                return IntentionProposal(inhabitant_id, "wait")
+
+        engine = make_engine()
+        runner = SimulationRunner(engine, IntentionController())
+        runner.run_tick()
+        engine.world.inhabitants["a"].hunger = 99
+
+        result = runner.run_tick()
+
+        intention = engine.world.inhabitants["a"].current_intention
+        self.assertEqual(intention["status"], "interrupted")
+        self.assertEqual(intention["reason"], "inhabitant_died")
+        lifecycle = next(
+            event for event in result.intention_events
+            if event["inhabitant_id"] == "a"
+        )
+        self.assertEqual(lifecycle["event_type"], "intention_interrupted")
+        self.assertEqual(lifecycle["payload"]["reason"], "inhabitant_died")
+
+    def test_intention_metrics_measure_lifecycle_and_avoided_calls(self) -> None:
+        class IntentionController:
+            def decide(self, inhabitant_id, perception):
+                if inhabitant_id == "a":
+                    return IntentionProposal("a", "move_to", target=Position(1, 3))
+                return IntentionProposal(inhabitant_id, "wait")
+
+        runner = SimulationRunner(make_engine(), IntentionController())
+        first = runner.run_tick()
+        second = runner.run_tick()
+
+        metrics = summarize_intentions(
+            first.intention_events + second.intention_events,
+            first.events + second.events,
+        )
+
+        self.assertEqual(metrics["destinations_reached"], 1)
+        self.assertEqual(metrics["continuation_actions"], 1)
+        self.assertEqual(metrics["model_calls_avoided"], 1)
+        self.assertEqual(metrics["unterminated"], 0)
+
     def test_innate_homeostasis_eats_when_at_food(self) -> None:
         class PassiveController:
             def decide(self, inhabitant_id, perception):
                 return None
 
         engine = make_engine()
-        engine.world.inhabitants["a"].hunger = 10
+        engine.world.inhabitants["a"].hunger = 20
         result = SimulationRunner(engine, PassiveController()).run_tick()
 
         event = next(event for event in result.events if event.payload.get("actor_id") == "a")
@@ -269,6 +396,8 @@ class SimulationEngineTests(unittest.TestCase):
 
         self.assertEqual(session.status, "stopped")
         self.assertEqual(session.engine.world.tick, 0)
+        self.assertTrue(session.start())
+        self.assertTrue(session.stop())
 
     def test_session_stop_and_observer_state_remain_responsive_during_decision(self) -> None:
         class SlowController:
@@ -406,34 +535,31 @@ class SimulationEngineTests(unittest.TestCase):
             self.assertEqual(store.run_summaries()[0]["last_tick"], 1)
             store.close()
 
-    def test_ollama_response_becomes_action_proposal(self) -> None:
-        response = b'{"message":{"content":"{\\"action_type\\":\\"move\\",\\"target_x\\":2,\\"target_y\\":1,\\"recipient_id\\":null,\\"message\\":null}"}}'
+    def test_ollama_response_becomes_intention(self) -> None:
+        response = b'{"message":{"content":"{\\"intention\\":{\\"type\\":\\"move_to\\",\\"target_x\\":2,\\"target_y\\":1}}"}}'
         controller = OllamaController(transport=lambda url, body, timeout: response)
 
-        proposal = controller.decide("a", {"tick": 1})
+        intention = controller.decide("a", {"tick": 1})
 
-        self.assertEqual(proposal, ActionProposal.move("a", Position(2, 1)))
+        self.assertEqual(intention, IntentionProposal("a", "move_to", target=Position(2, 1)))
+        self.assertEqual(controller.drain_calls()[0]["outcome"], "intention")
 
-    def test_ollama_response_becomes_bounded_plan(self) -> None:
-        content = json.dumps(
-            {
-                "steps": [
-                    {"action_type": "move", "target_x": 2, "target_y": 1, "recipient_id": None, "message": None},
-                    {"action_type": "rest", "target_x": None, "target_y": None, "recipient_id": None, "message": None},
-                ]
-            }
-        )
+    def test_ollama_response_becomes_signal_intention(self) -> None:
+        content = json.dumps({
+            "intention": {"type": "send_signal", "recipient_id": "b", "signal": "sig-ka17"}
+        })
         response = json.dumps({"message": {"content": content}}).encode()
         controller = OllamaController(transport=lambda url, body, timeout: response)
 
-        plan = controller.decide("a", {"tick": 1})
+        intention = controller.decide("a", {"tick": 1})
 
-        self.assertIsInstance(plan, PlanProposal)
-        self.assertEqual(len(plan.steps), 2)
-        self.assertEqual(controller.drain_calls()[0]["outcome"], "plan")
+        self.assertEqual(
+            intention,
+            IntentionProposal("a", "send_signal", recipient_id="b", signal="sig-ka17"),
+        )
 
     def test_ollama_request_disables_thinking_and_bounds_output(self) -> None:
-        response = b'{"message":{"content":"{\\"action_type\\":\\"none\\",\\"target_x\\":null,\\"target_y\\":null,\\"recipient_id\\":null,\\"message\\":null}"}}'
+        response = b'{"message":{"content":"{\\"intention\\":{\\"type\\":\\"wait\\"}}"}}'
         requests = []
 
         def transport(url, body, timeout):
@@ -488,13 +614,13 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(compact["visible_inhabitants"], [{"id": "b", "position": {"x": 2, "y": 1}}])
 
     def test_ollama_records_successful_call(self) -> None:
-        response = b'{"message":{"content":"{\\"action_type\\":\\"none\\",\\"target_x\\":null,\\"target_y\\":null,\\"recipient_id\\":null,\\"message\\":null}"}}'
+        response = b'{"message":{"content":"{\\"intention\\":{\\"type\\":\\"wait\\"}}"}}'
         controller = OllamaController(transport=lambda url, body, timeout: response)
 
-        self.assertIsNone(controller.decide("a", {"tick": 3}))
+        self.assertEqual(controller.decide("a", {"tick": 3}), IntentionProposal("a", "wait"))
 
         calls = controller.drain_calls()
-        self.assertEqual(calls[0]["outcome"], "no_action")
+        self.assertEqual(calls[0]["outcome"], "wait")
         self.assertEqual(calls[0]["model"], "gemma4:e2b")
         self.assertEqual(controller.drain_calls(), ())
 
@@ -511,12 +637,12 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(call["error"], "offline")
 
     def test_ollama_records_invalid_action(self) -> None:
-        response = b'{"message":{"content":"{\\"action_type\\":\\"reduce_hunger\\",\\"target_x\\":null,\\"target_y\\":null,\\"recipient_id\\":null,\\"message\\":null}"}}'
+        response = b'{"message":{"content":"{\\"intention\\":{\\"type\\":\\"become_leader\\"}}"}}'
         controller = OllamaController(transport=lambda url, body, timeout: response)
 
         self.assertIsNone(controller.decide("a", {"tick": 1}))
 
-        self.assertEqual(controller.drain_calls()[0]["outcome"], "invalid_action")
+        self.assertEqual(controller.drain_calls()[0]["outcome"], "invalid_intention")
 
     def test_sqlite_stores_model_calls(self) -> None:
         engine = make_engine()
@@ -537,6 +663,56 @@ class SimulationEngineTests(unittest.TestCase):
             self.assertEqual(calls[0]["outcome"], "transport_error")
             self.assertEqual(calls[0]["error"], "offline")
             store.close()
+
+    def test_sqlite_stores_intention_lifecycle_events(self) -> None:
+        engine = make_engine()
+
+        class IntentionController:
+            def decide(self, inhabitant_id, perception):
+                return IntentionProposal(inhabitant_id, "wait")
+
+        result = SimulationRunner(engine, IntentionController()).run_tick()
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteStore(Path(directory) / "run.sqlite3")
+            store.create_run("run-1", seed=7)
+            store.save_initial_snapshot("run-1", engine)
+            store.save_tick(
+                "run-1",
+                engine,
+                result.events,
+                result.proposals,
+                result.model_calls,
+                result.intention_events,
+            )
+
+            lifecycle = store.intention_events_for_run("run-1")
+
+            self.assertEqual(lifecycle[0]["event_type"], "intention_started")
+            self.assertEqual(lifecycle[1]["event_type"], "intention_completed")
+            self.assertEqual(lifecycle[1]["payload"]["reason"], "wait_selected")
+            store.close()
+
+    def test_controlled_intention_evaluations_are_reusable(self) -> None:
+        class CapableController:
+            def decide(self, inhabitant_id, perception):
+                self_state = perception["self"]
+                if self_state["fatigue"] >= 80:
+                    return IntentionProposal(inhabitant_id, "rest")
+                if any(item["position"] == self_state["position"] for item in perception["visible_food"]):
+                    return IntentionProposal(inhabitant_id, "consume", resource_type="food")
+                if perception["visible_food"]:
+                    target = perception["visible_food"][0]["position"]
+                    return IntentionProposal(
+                        inhabitant_id,
+                        "move_to",
+                        target=Position(target["x"], target["y"]),
+                    )
+                return IntentionProposal(inhabitant_id, "move_to", target=Position(0, 0))
+
+        results = evaluate_intention_controller(CapableController)
+
+        self.assertEqual(len(results), 5)
+        self.assertTrue(all(result.passed for result in results))
 
     def test_observer_view_is_read_only_and_contains_world_and_events(self) -> None:
         engine = make_engine()

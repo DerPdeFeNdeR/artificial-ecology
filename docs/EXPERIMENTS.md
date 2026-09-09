@@ -67,8 +67,18 @@ The first milestone should demonstrate that:
 - an inhabitant cannot consume a resource twice;
 - hidden world information does not enter an inhabitant’s observation;
 - model requests, responses, and unavailability produce explicit recorded model-call outcomes;
+- model-selected intentions, runtime-generated primitive actions, and engine outcomes retain distinct provenance;
+- persistent intentions reduce model calls without using hidden world state or silently overriding model priorities;
 - observer state remains available during model inference;
 - memory or communication changes later behavior in repeatable scenarios.
+
+## Controlled intention evaluation
+
+Before changing prompts or adding deterministic survival behavior, run `python3 -m artificial_ecology.evaluation`. It tests whether the configured model rests at critical fatigue, consumes food underfoot, approaches visible food, avoids an occupied destination, and explores when no resource is visible. These are controller evaluations, not new engine rules.
+
+The first `gemma4:e2b` intention baseline on 2026-09-09 passed two of five cases. It approached visible food and explored an empty world. It did not rest at critical fatigue, consume food underfoot, or avoid an occupied destination. This result agrees with the subsequent full run and should remain the comparison baseline for prompt or model changes.
+
+Recorded runs store intention lifecycle events separately from physical world events. Run `python3 -m artificial_ecology.analysis` to report completion, failure and interruption reasons, duration, repeated goals, destinations reached, continuation actions, and model calls avoided.
 
 ## Baseline observer run: scripted survival demo
 

@@ -25,6 +25,7 @@ def _proposal_to_dict(proposal: ActionProposal) -> dict[str, Any]:
         "message": proposal.message,
         "decision_source": proposal.decision_source,
         "plan_id": proposal.plan_id,
+        "intention_id": proposal.intention_id,
     }
 
 
@@ -38,6 +39,7 @@ def _proposal_from_dict(data: dict[str, Any]) -> ActionProposal:
         message=data.get("message"),
         decision_source=data.get("decision_source", "controller"),
         plan_id=data.get("plan_id"),
+        intention_id=data.get("intention_id"),
     )
 
 
@@ -86,6 +88,16 @@ class SQLiteStore:
                 state_json TEXT NOT NULL,
                 PRIMARY KEY (run_id, tick)
             );
+            CREATE TABLE IF NOT EXISTS intention_events (
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                tick INTEGER NOT NULL,
+                event_index INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                inhabitant_id TEXT NOT NULL,
+                intention_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, tick, event_index)
+            );
             """
         )
         self.connection.commit()
@@ -113,10 +125,12 @@ class SQLiteStore:
         events: Iterable[Event],
         proposals: Iterable[ActionProposal] = (),
         model_calls: Iterable[dict[str, Any]] = (),
+        intention_events: Iterable[dict[str, Any]] = (),
     ) -> None:
         events = tuple(events)
         proposals = tuple(proposals)
         model_calls = tuple(model_calls)
+        intention_events = tuple(intention_events)
         with self._lock, self.connection:
             self.connection.executemany(
                 "INSERT INTO events (sequence, run_id, tick, event_type, payload_json) VALUES (?, ?, ?, ?, ?)",
@@ -151,6 +165,21 @@ class SQLiteStore:
                     for index, call in enumerate(model_calls)
                 ],
             )
+            self.connection.executemany(
+                "INSERT OR REPLACE INTO intention_events (run_id, tick, event_index, event_type, inhabitant_id, intention_id, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        event["tick"],
+                        index,
+                        event["event_type"],
+                        event["inhabitant_id"],
+                        event["intention_id"],
+                        json.dumps(event["payload"], sort_keys=True),
+                    )
+                    for index, event in enumerate(intention_events)
+                ],
+            )
 
     def model_calls_for_run(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -159,6 +188,23 @@ class SQLiteStore:
                 (run_id,),
             )
             return [json.loads(row["call_json"]) for row in rows]
+
+    def intention_events_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT tick, event_type, inhabitant_id, intention_id, payload_json FROM intention_events WHERE run_id = ? ORDER BY tick, event_index",
+                (run_id,),
+            )
+            return [
+                {
+                    "tick": row["tick"],
+                    "event_type": row["event_type"],
+                    "inhabitant_id": row["inhabitant_id"],
+                    "intention_id": row["intention_id"],
+                    "payload": json.loads(row["payload_json"]),
+                }
+                for row in rows
+            ]
 
     def events_for_run(self, run_id: str) -> list[Event]:
         with self._lock:

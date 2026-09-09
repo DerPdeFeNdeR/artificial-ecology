@@ -22,11 +22,12 @@ An inhabitant runtime turns limited observations into possible action requests. 
 2. Interpretation updates beliefs, with uncertainty and possible error.
 3. Needs and desires create competing priorities.
 4. Memory retrieves relevant experiences and knowledge.
-5. Planning proposes one or more action requests.
-6. Validation asks the engine whether a request is currently legal.
-7. Consequences become new observations and memories.
+5. Planning selects a persistent intention or a deterministic controller proposes actions.
+6. The runtime translates an intention into one primitive action for the current tick.
+7. Validation asks the engine whether a request is currently legal.
+8. Consequences become new observations and memories.
 
-The runtime may use rules, learned models, or an LLM. None of these are authoritative.
+The runtime may use rules, learned models, or an LLM. None of these are authoritative. The local model selects goals such as moving to a destination, consuming a resource, resting, signaling, or waiting. The runtime stores that intention and performs mechanical translation into at most one primitive action per tick. It requests another model decision only after completion, failure, or interruption.
 
 ## Canonical tick execution
 
@@ -46,19 +47,20 @@ The engine does not advance while scheduled model decisions are pending. A slow 
 
 Action proposals are resolved with a seeded, per-tick ordering or an explicit system rule. Request completion order never determines who wins a conflict.
 
-The initial model adapter uses Ollama and `gemma4:e2b`. The runtime uses one shared loaded model with separate inhabitant contexts. Initial inference is serialized until measurements justify parallel requests.
+The initial model adapter uses Ollama and `gemma4:e2b`. The runtime uses one shared loaded model with separate inhabitant contexts and may request independent inhabitant decisions concurrently at the decision barrier.
 
-The LLM receives a compact physical observation, selected memories, active desires, current plans, recent action results, and descriptions of the inhabitant’s capabilities. Private cognition is supplied through the decision context rather than duplicated inside the physical self-observation. Action descriptions state observable consequences and constraints, including need urgency, adjacent movement, occupied cells, resource requirements, and failed-action evidence. It does not receive hidden world facts revealed by current action legality. The engine validates proposals against authoritative state and exposes results through later observations.
+The LLM receives a compact physical observation, selected memories, active desires, the current intention, recent action results, and descriptions of the inhabitant’s capabilities. Private cognition is supplied through the decision context rather than duplicated inside the physical self-observation. It chooses a structured intention, not executable code or a state mutation. Runtime navigation uses only available knowledge and public movement constraints. The engine validates every translated action against authoritative state and exposes results through later observations.
 
 The initial cognition runtime records these distinctions explicitly:
 
 - beliefs are keyed claims with a value, confidence, source, and observation ticks;
 - memories have stable run-local identifiers and retrieval is bounded to recent records;
 - plans contain a requested action, lifecycle status, creation tick, and result event;
+- intentions contain a model-selected goal, lifecycle status, creation tick, and stable provenance identifier;
 - decisions retain desires, beliefs, and retrieved memory identifiers as decision context;
 - failed actions can revise a local belief without changing world truth.
 
-Ollama calls are recorded with the model name, complete request context, response or error, and outcome. The initial local controller disables thinking and bounds output because the inhabitant decision is a small structured action request. Transport failures pause the session and remain explicit records; they are not silently represented as successful decisions. The observer publishes the last completed world state and decision progress while inference is running. The observer demo uses the scripted controller by default and can be run with `AE_CONTROLLER=ollama` for a local-model experiment. In WSL, it uses the Windows Ollama endpoint at `http://172.30.96.1:11434` unless `OLLAMA_BASE_URL` overrides it.
+Ollama calls are recorded with the model name, complete request context, response or error, and outcome. The initial local controller disables thinking and bounds output because the inhabitant decision is a small structured intention. Transport failures pause the session and remain explicit records; they are not silently represented as successful decisions. The observer publishes the last completed world state and decision progress while inference is running. The observer demo uses the scripted controller by default and can be run with `AE_CONTROLLER=ollama` for a local-model experiment. In WSL, it uses the Windows Ollama endpoint at `http://172.30.96.1:11434` unless `OLLAMA_BASE_URL` overrides it.
 
 These are baseline structures, not claims that inhabitants reason correctly. Later work should add noisy recall, belief revision, richer retrieval, and multi-step plans while preserving the distinction between interpretation and authoritative state.
 

@@ -18,7 +18,7 @@ from .engine import Event, SimulationEngine
 
 class DecisionController(Protocol):
     def decide(self, inhabitant_id: str, perception: dict[str, Any]) -> "DecisionResult":
-        """Return a bounded plan, one action, or no action for the decision barrier."""
+        """Return an intention, bounded plan, one action, or no decision."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,29 @@ class PlanProposal:
     steps: tuple[ActionProposal, ...]
 
 
-DecisionResult = ActionProposal | PlanProposal | None
+@dataclass(frozen=True, slots=True)
+class IntentionProposal:
+    """A persistent goal selected by a controller, not a physical action."""
+
+    actor_id: str
+    intention_type: str
+    target: Position | None = None
+    resource_type: str | None = None
+    recipient_id: str | None = None
+    signal: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "actor_id": self.actor_id,
+            "intention_type": self.intention_type,
+            "target": {"x": self.target.x, "y": self.target.y} if self.target else None,
+            "resource_type": self.resource_type,
+            "recipient_id": self.recipient_id,
+            "signal": self.signal,
+        }
+
+
+DecisionResult = ActionProposal | PlanProposal | IntentionProposal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +59,7 @@ class TickResult:
     proposals: tuple[ActionProposal, ...]
     events: tuple[Event, ...]
     model_calls: tuple[dict[str, Any], ...] = ()
+    intention_events: tuple[dict[str, Any], ...] = ()
 
 
 class SimulationRunner:
@@ -54,9 +77,13 @@ class SimulationRunner:
         self._on_decision_progress = on_decision_progress
         self._max_decision_workers = max(1, max_decision_workers)
         self._active_plans: dict[str, dict[str, Any]] = self._restore_plans()
+        self._active_intentions: dict[str, dict[str, Any]] = self._restore_intentions()
+        self._intention_events: list[dict[str, Any]] = []
 
     def run_tick(self) -> TickResult:
+        self._intention_events = []
         environmental_events = list(self.engine.advance())
+        self._interrupt_dead_inhabitants(environmental_events)
         perceptions: dict[str, dict[str, Any]] = {}
         proposals: list[ActionProposal] = []
 
@@ -66,7 +93,7 @@ class SimulationRunner:
             if self.engine.world.inhabitants[inhabitant_id].alive
         ]
         total_decisions = len(active_ids)
-        decision_inputs: dict[str, tuple[Any, dict[str, Any], dict[str, Any], dict[str, Any] | None, str]] = {}
+        decision_inputs: dict[str, tuple[Any, dict[str, Any], dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, str]] = {}
         decision_futures = {}
         for inhabitant_id in active_ids:
             inhabitant = self.engine.world.inhabitants[inhabitant_id]
@@ -85,12 +112,31 @@ class SimulationRunner:
             inhabitant.perception_history = inhabitant.perception_history[-20:]
             self._remember(inhabitant, "perception", inhabitant.perception_history[-1])
             active_plan = self._active_plans.get(inhabitant_id)
+            active_intention = self._active_intentions.get(inhabitant_id)
             if active_plan is not None:
                 if active_plan.get("observation_signature") is None:
                     active_plan["observation_signature"] = self._observation_signature(perception)
                 elif self._plan_interrupted(active_plan, perception, inhabitant):
                     self._finish_plan(inhabitant, "interrupted")
                     active_plan = None
+            interruption_reason = (
+                self._intention_interruption_reason(active_intention, inhabitant)
+                if active_intention is not None
+                else None
+            )
+            if active_intention is not None and interruption_reason is not None:
+                self._finish_intention(inhabitant, "interrupted", reason=interruption_reason)
+                active_intention = None
+            if active_plan is None and active_intention is None:
+                homeostasis = self._innate_homeostasis(inhabitant, perception)
+                if homeostasis is not None:
+                    active_plan = self._new_plan(
+                        inhabitant,
+                        perception,
+                        [homeostasis],
+                        "innate_homeostasis",
+                    )
+                    self._active_plans[inhabitant_id] = active_plan
             decision_context = self._decision_context(inhabitant, perception)
             decision_perception = {
                 **perception,
@@ -102,9 +148,10 @@ class SimulationRunner:
                 perception,
                 decision_context,
                 active_plan,
+                active_intention,
                 getattr(self.controller, "decision_source", "controller"),
             )
-            if active_plan is None:
+            if active_plan is None and active_intention is None:
                 decision_futures[inhabitant_id] = decision_perception
 
         decisions: dict[str, DecisionResult] = {}
@@ -120,41 +167,68 @@ class SimulationRunner:
                     decisions[futures[future]] = future.result()
 
         for completed_decisions, inhabitant_id in enumerate(active_ids, start=1):
-            inhabitant, perception, decision_context, active_plan, decision_source = decision_inputs[inhabitant_id]
-            if active_plan is None:
+            inhabitant, perception, decision_context, active_plan, active_intention, decision_source = decision_inputs[inhabitant_id]
+            selected_intention = None
+            if active_plan is None and active_intention is None:
                 decision = decisions.get(inhabitant_id)
+                if isinstance(decision, IntentionProposal):
+                    selected_intention = decision
+                    active_intention = self._new_intention(inhabitant, perception, decision, decision_source)
+                    self._active_intentions[inhabitant_id] = active_intention
+                    decision_source = "model_intention"
+                    if decision.intention_type == "wait":
+                        self._finish_intention(inhabitant, "succeeded", reason="wait_selected")
+                        active_intention = None
                 steps = self._steps_from(decision)
-                if not steps:
+                if active_intention is None and selected_intention is None and not steps:
                     homeostasis = self._innate_homeostasis(inhabitant, perception)
                     if homeostasis is not None:
                         steps = [homeostasis]
                         decision_source = "innate_homeostasis"
-                if not steps:
+                if active_intention is None and selected_intention is None and not steps:
                     exploration = self._innate_exploration(inhabitant, perception)
                     if exploration is not None:
                         steps = [exploration]
                         decision_source = "innate_exploration"
-                if steps:
+                if active_intention is None and steps:
                     steps[0] = self._legalize_first_step(inhabitant, perception, steps[0])
-                active_plan = self._new_plan(inhabitant, perception, steps, decision_source) if steps else None
+                active_plan = self._new_plan(inhabitant, perception, steps, decision_source) if active_intention is None and steps else None
                 if active_plan is not None:
                     self._active_plans[inhabitant_id] = active_plan
+            elif active_intention is not None:
+                decision_source = "intention_continuation"
             else:
-                decision_source = "plan_continuation"
+                decision_source = (
+                    active_plan["source"]
+                    if active_plan["created_tick"] == perception["tick"]
+                    else "plan_continuation"
+                )
 
-            proposal = self._next_proposal(active_plan, decision_source)
+            proposal = (
+                self._action_for_intention(inhabitant, active_intention, decision_source)
+                if active_intention is not None
+                else self._next_proposal(active_plan, decision_source)
+            )
+            if active_intention is not None and proposal is None:
+                self._finish_intention(inhabitant, "interrupted", reason="no_legal_action")
+                active_intention = None
             if proposal is None:
                 inhabitant.no_action_streak += 1
             else:
                 inhabitant.no_action_streak = 0
-            inhabitant.last_decision = self._decision_record(inhabitant, proposal, decision_context)
-            inhabitant.current_plan = [
-                self._plan_view(active_plan, proposal, decision_source)
-            ] if active_plan is not None and proposal is not None else [{
-                "created_tick": perception["tick"],
-                "status": "no_action",
-                "request": None,
-            }]
+            inhabitant.last_decision = self._decision_record(
+                inhabitant, proposal, decision_context, selected_intention
+            )
+            if active_plan is not None and proposal is not None:
+                inhabitant.current_plan = [self._plan_view(active_plan, proposal, decision_source)]
+            elif active_intention is not None:
+                inhabitant.current_plan = []
+            elif active_intention is None:
+                inhabitant.current_plan = [{
+                    "created_tick": perception["tick"],
+                    "status": "no_action",
+                    "request": None,
+                }]
             if proposal is not None:
                 proposals.append(proposal)
             if self._on_decision_progress is not None:
@@ -171,7 +245,16 @@ class SimulationRunner:
             proposals=tuple(proposals),
             events=tuple(environmental_events) + action_events,
             model_calls=model_calls,
+            intention_events=tuple(self._intention_events),
         )
+
+    def _interrupt_dead_inhabitants(self, events: list[Event]) -> None:
+        for event in events:
+            if event.event_type != "inhabitant_died":
+                continue
+            inhabitant = self.engine.world.inhabitants[event.payload["inhabitant_id"]]
+            self._finish_plan(inhabitant, "interrupted", event)
+            self._finish_intention(inhabitant, "interrupted", event, "inhabitant_died")
 
     def _record_action_results(self, events: list[Event] | tuple[Event, ...]) -> None:
         for event in events:
@@ -181,6 +264,7 @@ class SimulationRunner:
                 continue
             self._remember(inhabitant, "action_result", event.to_dict())
             self._complete_plan(inhabitant, event)
+            self._complete_intention(inhabitant, event)
             self._learn_from_action(inhabitant, event)
 
     def _complete_plan(self, inhabitant: Any, event: Event) -> None:
@@ -212,6 +296,185 @@ class SimulationRunner:
         if event is not None:
             completed.update({"completed_tick": event.tick, "result_event_sequence": event.sequence})
         inhabitant.current_plan = [completed]
+
+    def _complete_intention(self, inhabitant: Any, event: Event) -> None:
+        intention = self._active_intentions.get(inhabitant.id)
+        if intention is None or intention["intention_id"] != event.payload.get("intention_id"):
+            return
+        if event.event_type not in {"action_succeeded", "message_delivered"}:
+            self._finish_intention(
+                inhabitant,
+                "failed",
+                event,
+                event.payload.get("reason", "action_failed"),
+            )
+            return
+        if intention["proposal"].intention_type == "move_to":
+            if inhabitant.position == intention["proposal"].target:
+                self._finish_intention(inhabitant, "succeeded", event, "target_reached")
+            else:
+                distance = inhabitant.position.distance_to(intention["proposal"].target)
+                if distance < intention["best_distance"]:
+                    intention["best_distance"] = distance
+                    intention["no_progress_ticks"] = 0
+                else:
+                    intention["no_progress_ticks"] += 1
+                if intention["no_progress_ticks"] >= 3:
+                    self._finish_intention(inhabitant, "interrupted", event, "no_progress")
+                    return
+                inhabitant.current_intention = self._intention_view(intention, "active")
+            return
+        self._finish_intention(inhabitant, "succeeded", event, "action_succeeded")
+
+    def _finish_intention(
+        self,
+        inhabitant: Any,
+        status: str,
+        event: Event | None = None,
+        reason: str | None = None,
+    ) -> None:
+        intention = self._active_intentions.pop(inhabitant.id, None)
+        if intention is None:
+            return
+        view = self._intention_view(intention, status)
+        if event is not None:
+            view.update({"completed_tick": event.tick, "result_event_sequence": event.sequence})
+        if reason is not None:
+            view["reason"] = reason
+        inhabitant.current_intention = view
+        event_type = {
+            "succeeded": "intention_completed",
+            "failed": "intention_failed",
+            "interrupted": "intention_interrupted",
+        }[status]
+        self._record_intention_event(inhabitant.id, intention, event_type, reason)
+
+    def _new_intention(
+        self,
+        inhabitant: Any,
+        perception: dict[str, Any],
+        proposal: IntentionProposal,
+        source: str,
+    ) -> dict[str, Any]:
+        intention = {
+            "intention_id": f"{inhabitant.id}:intention:{perception['tick']}",
+            "source": source,
+            "created_tick": perception["tick"],
+            "proposal": proposal,
+            "need_values": {
+                "hunger": inhabitant.hunger,
+                "thirst": inhabitant.thirst,
+                "fatigue": inhabitant.fatigue,
+            },
+            "best_distance": (
+                inhabitant.position.distance_to(proposal.target)
+                if proposal.target is not None
+                else 0
+            ),
+            "no_progress_ticks": 0,
+        }
+        inhabitant.current_intention = SimulationRunner._intention_view(intention, "active")
+        self._record_intention_event(inhabitant.id, intention, "intention_started")
+        return intention
+
+    def _record_intention_event(
+        self,
+        inhabitant_id: str,
+        intention: dict[str, Any],
+        event_type: str,
+        reason: str | None = None,
+    ) -> None:
+        self._intention_events.append({
+            "tick": self.engine.world.tick,
+            "event_type": event_type,
+            "inhabitant_id": inhabitant_id,
+            "intention_id": intention["intention_id"],
+            "payload": {
+                "goal": intention["proposal"].to_dict(),
+                "reason": reason,
+                "source": intention["source"],
+            },
+        })
+
+    @staticmethod
+    def _intention_view(intention: dict[str, Any], status: str) -> dict[str, Any]:
+        return {
+            "intention_id": intention["intention_id"],
+            "source": intention["source"],
+            "created_tick": intention["created_tick"],
+            "status": status,
+            "goal": intention["proposal"].to_dict(),
+            "progress": {
+                "best_distance": intention.get("best_distance", 0),
+                "no_progress_ticks": intention.get("no_progress_ticks", 0),
+            },
+        }
+
+    def _action_for_intention(
+        self,
+        inhabitant: Any,
+        intention: dict[str, Any],
+        source: str,
+    ) -> ActionProposal | None:
+        goal = intention["proposal"]
+        action: ActionProposal | None = None
+        if goal.intention_type == "move_to" and goal.target is not None:
+            target = self._next_path_step(inhabitant, goal.target)
+            if target is not None:
+                action = ActionProposal.move(inhabitant.id, target)
+        elif goal.intention_type == "consume":
+            if goal.resource_type == "food":
+                action = ActionProposal.eat(inhabitant.id)
+            elif goal.resource_type == "water":
+                action = ActionProposal.drink(inhabitant.id)
+        elif goal.intention_type == "rest":
+            action = ActionProposal.rest(inhabitant.id)
+        elif goal.intention_type == "send_signal" and goal.recipient_id and goal.signal:
+            action = ActionProposal.speak(inhabitant.id, goal.recipient_id, goal.signal)
+        if action is None:
+            return None
+        return replace(
+            action,
+            decision_source=source,
+            intention_id=intention["intention_id"],
+        )
+
+    def _next_path_step(self, inhabitant: Any, destination: Position) -> Position | None:
+        if inhabitant.position == destination or not self.engine.world.contains(destination):
+            return None
+        occupied = {
+            other.position
+            for other in self.engine.world.inhabitants.values()
+            if other.alive and other.id != inhabitant.id
+        }
+        candidates = []
+        for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+            target = Position(inhabitant.position.x + dx, inhabitant.position.y + dy)
+            if not self.engine.world.contains(target):
+                continue
+            if target in self.engine.world.obstacles or target in occupied:
+                continue
+            memory = inhabitant.spatial_memory.get(self._location_key(target), {})
+            candidates.append((
+                target.distance_to(destination),
+                memory.get("visit_count", 0),
+                target.x,
+                target.y,
+                target,
+            ))
+        return min(candidates)[-1] if candidates else None
+
+    @staticmethod
+    def _intention_interruption_reason(intention: dict[str, Any], inhabitant: Any) -> str | None:
+        previous = intention.get("need_values", {})
+        for name, value in (
+            ("hunger", inhabitant.hunger),
+            ("thirst", inhabitant.thirst),
+            ("fatigue", inhabitant.fatigue),
+        ):
+            if previous.get(name, 0) < 80 <= value:
+                return f"critical_{name}"
+        return None
 
     @staticmethod
     def _steps_from(decision: DecisionResult) -> list[ActionProposal]:
@@ -296,6 +559,36 @@ class SimulationRunner:
                 }
         return plans
 
+    def _restore_intentions(self) -> dict[str, dict[str, Any]]:
+        intentions = {}
+        for inhabitant in self.engine.world.inhabitants.values():
+            current = inhabitant.current_intention
+            if not current or current.get("status") != "active":
+                continue
+            goal = current.get("goal", {})
+            target = goal.get("target")
+            proposal = IntentionProposal(
+                actor_id=inhabitant.id,
+                intention_type=goal["intention_type"],
+                target=Position(target["x"], target["y"]) if target else None,
+                resource_type=goal.get("resource_type"),
+                recipient_id=goal.get("recipient_id"),
+                signal=goal.get("signal"),
+            )
+            intentions[inhabitant.id] = {
+                "intention_id": current["intention_id"],
+                "source": current.get("source", "controller"),
+                "created_tick": current["created_tick"],
+                "proposal": proposal,
+                "need_values": {},
+                "best_distance": current.get("progress", {}).get(
+                    "best_distance",
+                    inhabitant.position.distance_to(proposal.target) if proposal.target else 0,
+                ),
+                "no_progress_ticks": current.get("progress", {}).get("no_progress_ticks", 0),
+            }
+        return intentions
+
     @staticmethod
     def _action_from_dict(data: dict[str, Any]) -> ActionProposal:
         target = data.get("target")
@@ -307,6 +600,7 @@ class SimulationRunner:
             message=data.get("message"),
             decision_source=data.get("decision_source", "controller"),
             plan_id=data.get("plan_id"),
+            intention_id=data.get("intention_id"),
         )
 
     @staticmethod
@@ -329,12 +623,18 @@ class SimulationRunner:
             SimulationRunner._update_belief(inhabitant, f"water_at:{inhabitant.position.x},{inhabitant.position.y}", False, .95, "failed_action", event.tick)
 
     @staticmethod
-    def _decision_record(inhabitant: Any, proposal: ActionProposal | None, context: dict[str, Any]) -> dict[str, Any]:
+    def _decision_record(
+        inhabitant: Any,
+        proposal: ActionProposal | None,
+        context: dict[str, Any],
+        intention: IntentionProposal | None = None,
+    ) -> dict[str, Any]:
         return {
             "actor_id": inhabitant.id,
             "tick": context["tick"],
             "action_type": proposal.action_type if proposal is not None else "none",
             "proposal": proposal.to_dict() if proposal is not None else None,
+            "intention": intention.to_dict() if intention is not None else None,
             "desires": dict(context["desires"]),
             "beliefs": dict(context["beliefs"]),
             "retrieved_memory_ids": [memory["id"] for memory in context["memories"]],
@@ -353,6 +653,7 @@ class SimulationRunner:
             "memories": SimulationRunner._retrieve_memories(inhabitant, perception),
             "recent_action_results": SimulationRunner._recent_action_results(inhabitant),
             "current_plan": list(inhabitant.current_plan),
+            "current_intention": inhabitant.current_intention,
         }
 
     @staticmethod
@@ -404,12 +705,11 @@ class SimulationRunner:
         ]
         return {
             "need_scale": "Needs range from 0 to 100; reaching 100 causes death.",
-            "move": "Target one orthogonally adjacent cell. It fails for out-of-bounds, obstacles, or occupied cells.",
-            "eat": "Succeeds only when food is at the current position and reduces hunger.",
-            "drink": "Succeeds only when water is at the current position and reduces thirst.",
+            "move_to": "Choose any in-bounds destination. The runtime finds legal adjacent steps and the engine validates each one.",
+            "consume": "Choose food or water; it succeeds only when that resource is at the current position.",
             "rest": "Reduces fatigue only; it does not reduce hunger or thirst.",
-            "speak": "Emits an opaque signal only to a visible inhabitant within communication range; use sig- followed by invented characters.",
-            "none": "Changes nothing; needs continue to increase on the next tick.",
+            "send_signal": "Emits an opaque signal only to a visible inhabitant within communication range; use sig- followed by invented characters.",
+            "wait": "Changes nothing; needs continue to increase on the next tick.",
             "visible_occupied_positions": occupied,
         }
 
@@ -544,24 +844,12 @@ class SimulationRunner:
             item == {"x": inhabitant.position.x, "y": inhabitant.position.y}
             for item in perception["visible_water"]
         )
-        if food_here and hunger >= thirst and hunger > 0:
+        if food_here and hunger >= thirst and hunger >= 20:
             return ActionProposal.eat(inhabitant.id)
-        if water_here and thirst > hunger and thirst > 0:
+        if water_here and thirst > hunger and thirst >= 20:
             return ActionProposal.drink(inhabitant.id)
 
-        if max(hunger, thirst) < 20:
-            return None
-        targets = perception["visible_food"] if hunger >= thirst else perception["visible_water"]
-        if not targets:
-            return None
-        target = min(
-            (item.get("position", item) for item in targets),
-            key=lambda item: abs(item["x"] - inhabitant.position.x) + abs(item["y"] - inhabitant.position.y),
-        )
-        destination = Position(target["x"], target["y"])
-        if destination == inhabitant.position:
-            return None
-        return ActionProposal.move(inhabitant.id, self._step_toward(inhabitant.position, destination))
+        return None
 
     @staticmethod
     def _step_toward(origin: Position, target: Position) -> Position:
@@ -724,6 +1012,9 @@ class SimulationSession:
 
     def reset(self) -> None:
         self.stop()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
         with self._simulation_lock:
             with self._lock:
                 self._generation += 1
@@ -739,6 +1030,7 @@ class SimulationSession:
                 self._decision_progress = {"tick": 0, "completed": 0, "total": 0}
                 self._published_world = self.engine.world.to_dict()
                 self._published_events = []
+                self._thread = None
                 if self._on_reset is not None:
                     self._on_reset(self.engine)
 
@@ -799,7 +1091,7 @@ class OllamaConfig:
 
 
 class OllamaController:
-    """Turns local Ollama JSON responses into engine-validated proposals."""
+    """Turns local Ollama JSON responses into persistent intentions."""
 
     def __init__(
         self,
@@ -833,27 +1125,24 @@ class OllamaController:
             "format": {
                 "type": "object",
                 "properties": {
-                    "steps": {
-                        "type": "array",
-                        "maxItems": 8,
-                        "items": OllamaController._action_schema(),
-                    },
+                    "intention": OllamaController._intention_schema(),
                 },
-                "required": ["steps"],
+                "required": ["intention"],
+                "additionalProperties": False,
             },
             "messages": [
                 {
                     "role": "system",
                     "content": (
-                        "Choose a bounded plan using move, eat, drink, rest, speak, or none. "
-                        "Return one-line JSON with a steps array containing at most 8 primitive actions and no explanation. "
-                        "Speak only by emitting an opaque signal such as sig-ka17; never use natural-language words. "
-                        "Use an empty steps array for no action. "
+                        "Choose one persistent intention: move_to, consume, rest, send_signal, or wait. "
+                        "Return compact one-line JSON and no explanation. For move_to, choose the meaningful destination; "
+                        "the runtime handles legal adjacent steps. "
+                        "Send only an opaque signal such as sig-ka17; never use natural-language words. "
                         "Need values run from 0 to 100 and 100 causes death. Rest only reduces fatigue. "
-                        "Eat and drink require the resource at the current position. Move one orthogonally adjacent cell. "
+                        "Consume requires the chosen resource at the current position. "
                         "When no needed resource is visible, movement can reveal new observations; doing nothing leaves needs rising. "
-                        "Use exploration pressure to choose a safe move when no needed resource is visible. "
-                        "Use recent failed actions and visible occupancy to avoid repeating invalid requests."
+                        "Use exploration pressure to choose an in-bounds, currently unoccupied destination when no needed resource is visible. "
+                        "Use memory and recent failures to avoid depleted or dangerous destinations."
                     ),
                 },
                 {
@@ -884,16 +1173,10 @@ class OllamaController:
             content = outer["message"]["content"]
             data = json.loads(content)
             result = self._decision_from_json(inhabitant_id, data)
-            if isinstance(result, PlanProposal):
-                outcome = "plan"
-            elif isinstance(result, ActionProposal):
-                outcome = "proposal"
-            elif result is None and data.get("steps") == []:
-                outcome = "no_action"
-            elif result is None and data.get("action_type") == "none":
-                outcome = "no_action"
+            if isinstance(result, IntentionProposal):
+                outcome = "wait" if result.intention_type == "wait" else "intention"
             else:
-                outcome = "invalid_action"
+                outcome = "invalid_intention"
             call.update({"outcome": outcome, "response": outer})
             return result
         except OSError as error:
@@ -914,33 +1197,42 @@ class OllamaController:
         return calls
 
     @staticmethod
-    def _action_schema() -> dict[str, Any]:
+    def _intention_schema() -> dict[str, Any]:
         return {
             "oneOf": [
                 {
                     "type": "object",
                     "properties": {
-                        "action_type": {"const": "move"},
+                        "type": {"const": "move_to"},
                         "target_x": {"type": "integer"},
                         "target_y": {"type": "integer"},
                     },
-                    "required": ["action_type", "target_x", "target_y"],
-                    "additionalProperties": False,
-                },
-                {
-                    "type": "object",
-                    "properties": {"action_type": {"enum": ["eat", "drink", "rest", "none"]}},
-                    "required": ["action_type"],
+                    "required": ["type", "target_x", "target_y"],
                     "additionalProperties": False,
                 },
                 {
                     "type": "object",
                     "properties": {
-                        "action_type": {"const": "speak"},
-                        "recipient_id": {"type": "string"},
-                        "message": {"type": "string", "pattern": "^sig-[a-z0-9-]{2,24}$"},
+                        "type": {"const": "consume"},
+                        "resource": {"enum": ["food", "water"]},
                     },
-                    "required": ["action_type", "recipient_id", "message"],
+                    "required": ["type", "resource"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {"type": {"enum": ["rest", "wait"]}},
+                    "required": ["type"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "type": {"const": "send_signal"},
+                        "recipient_id": {"type": "string"},
+                        "signal": {"type": "string", "pattern": "^sig-[a-z0-9-]{2,24}$"},
+                    },
+                    "required": ["type", "recipient_id", "signal"],
                     "additionalProperties": False,
                 },
             ]
@@ -958,6 +1250,7 @@ class OllamaController:
             "beliefs": dict(list(cognition.get("beliefs", {}).items())[-8:]),
             "spatial_memory": dict(list(cognition.get("spatial_memory", {}).items())[-12:]),
             "recent_action_results": cognition.get("recent_action_results", [])[-3:],
+            "current_intention": cognition.get("current_intention"),
         }
         compact_self = {
             key: perception["self"][key]
@@ -967,10 +1260,11 @@ class OllamaController:
         compact_rules = {
             key: value
             for key, value in perception.get("action_rules", {}).items()
-            if key in {"move", "eat", "drink", "rest", "speak", "none", "visible_occupied_positions"}
+            if key in {"move_to", "consume", "rest", "send_signal", "wait", "visible_occupied_positions"}
         }
         return {
             "tick": perception["tick"],
+            "bounds": perception.get("bounds"),
             "self": compact_self,
             "visible_inhabitants": [
                 {"id": item["id"], "position": item["position"]}
@@ -985,32 +1279,32 @@ class OllamaController:
 
     @staticmethod
     def _decision_from_json(inhabitant_id: str, data: dict[str, Any]) -> DecisionResult:
-        if "steps" in data:
-            steps = []
-            for step in data["steps"]:
-                proposal = OllamaController._proposal_from_json(inhabitant_id, step)
-                if proposal is None:
-                    return None
-                steps.append(proposal)
-            return PlanProposal(inhabitant_id, tuple(steps)) if steps else None
-        return OllamaController._proposal_from_json(inhabitant_id, data)
-
-    @staticmethod
-    def _proposal_from_json(inhabitant_id: str, data: dict[str, Any]) -> ActionProposal | None:
-        action_type = data.get("action_type")
-        if action_type in (None, "none"):
+        intention = data.get("intention")
+        if not isinstance(intention, dict):
             return None
-        if action_type == "move":
-            if not isinstance(data.get("target_x"), int) or not isinstance(data.get("target_y"), int):
+        intention_type = intention.get("type")
+        if intention_type == "move_to":
+            if not isinstance(intention.get("target_x"), int) or not isinstance(intention.get("target_y"), int):
                 return None
-            return ActionProposal.move(inhabitant_id, Position(data["target_x"], data["target_y"]))
-        if action_type in {"eat", "drink", "rest"}:
-            return ActionProposal(inhabitant_id, action_type)
-        if action_type == "speak":
-            recipient_id = data.get("recipient_id")
-            message = data.get("message")
-            if isinstance(recipient_id, str) and isinstance(message, str):
-                return ActionProposal.speak(inhabitant_id, recipient_id, message)
+            return IntentionProposal(
+                inhabitant_id,
+                intention_type,
+                target=Position(intention["target_x"], intention["target_y"]),
+            )
+        if intention_type == "consume" and intention.get("resource") in {"food", "water"}:
+            return IntentionProposal(inhabitant_id, intention_type, resource_type=intention["resource"])
+        if intention_type in {"rest", "wait"}:
+            return IntentionProposal(inhabitant_id, intention_type)
+        if intention_type == "send_signal":
+            recipient_id = intention.get("recipient_id")
+            signal = intention.get("signal")
+            if isinstance(recipient_id, str) and isinstance(signal, str):
+                return IntentionProposal(
+                    inhabitant_id,
+                    intention_type,
+                    recipient_id=recipient_id,
+                    signal=signal,
+                )
         return None
 
     @staticmethod

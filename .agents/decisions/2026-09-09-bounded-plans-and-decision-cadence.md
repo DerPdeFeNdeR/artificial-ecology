@@ -1,7 +1,7 @@
 # ADR: Bounded Plans and Decision Cadence
 
 - Date: 2026-09-09
-- Status: accepted
+- Status: superseded for local-model decisions by `2026-09-09-intention-driven-inhabitant-runtime.md`; retained for scripted controllers
 - Area: inhabitant runtime performance and observability
 
 ## Decision

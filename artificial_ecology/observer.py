@@ -155,7 +155,7 @@ INDEX_HTML = """<!doctype html>
           ? `<code>${JSON.stringify(inhabitant.beliefs, null, 2)}</code>`
           : 'No beliefs recorded.';
       } else {
-        inspector.innerHTML = `<table><tr><th>DESIRES</th><td><code>${JSON.stringify(inhabitant.desires, null, 2)}</code></td></tr><tr><th>PLAN</th><td><code>${JSON.stringify(inhabitant.current_plan, null, 2)}</code></td></tr><tr><th>LAST DECISION</th><td><code>${JSON.stringify(inhabitant.last_decision, null, 2)}</code></td></tr></table>`;
+        inspector.innerHTML = `<table><tr><th>DESIRES</th><td><code>${JSON.stringify(inhabitant.desires, null, 2)}</code></td></tr><tr><th>INTENTION</th><td><code>${JSON.stringify(inhabitant.current_intention, null, 2)}</code></td></tr><tr><th>PLAN</th><td><code>${JSON.stringify(inhabitant.current_plan, null, 2)}</code></td></tr><tr><th>LAST DECISION</th><td><code>${JSON.stringify(inhabitant.last_decision, null, 2)}</code></td></tr></table>`;
       }
       document.querySelectorAll('[data-inspector-view]').forEach(button => button.classList.toggle('active', button.dataset.inspectorView === inspectorView));
     }
