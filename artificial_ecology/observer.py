@@ -20,35 +20,61 @@ INDEX_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Artificial Ecology Observer</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
-    body { margin: 0; background: #111827; color: #e5e7eb; }
-    main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px) minmax(0, 280px); gap: 1rem; min-height: 100vh; padding: 1rem; box-sizing: border-box; }
-    section { min-width: 0; background: #1f2937; border: 1px solid #374151; border-radius: .6rem; padding: 1rem; }
-    h1, h2 { margin-top: 0; }
-    canvas { display: block; width: min(80vw, 720px); height: min(80vw, 720px); image-rendering: pixelated; background: #0f172a; border: 1px solid #4b5563; }
-    pre { max-height: 55vh; overflow: auto; white-space: pre-wrap; font-size: .8rem; }
-    .meta { color: #9ca3af; margin-bottom: 1rem; }
-    .controls { display: flex; gap: .5rem; margin-bottom: 1rem; }
-    button { background: #374151; color: #e5e7eb; border: 1px solid #6b7280; border-radius: .35rem; padding: .45rem .8rem; cursor: pointer; }
-    button:hover { background: #4b5563; }
-    label { display: block; margin: .75rem 0 .25rem; color: #9ca3af; font-size: .85rem; }
-    select { width: 100%; background: #111827; color: #e5e7eb; border: 1px solid #4b5563; border-radius: .35rem; padding: .4rem; }
-    input[type="range"] { width: 100%; }
-    .inspector { min-width: 0; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }
+    :root { color-scheme: dark; font-family: "Courier New", monospace; }
+    body { margin: 0; background: #0d120f; color: #c7d0c3; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px); grid-template-rows: minmax(0, 1fr) minmax(220px, .65fr); gap: .75rem; height: calc(100vh - 1.5rem); min-height: 0; padding: .75rem; box-sizing: border-box; overflow: hidden; }
+    section { min-width: 0; background: #18221b; border: 1px solid #4b5a4f; padding: .75rem; }
+    .map-panel { grid-column: 1; grid-row: 1; min-height: 0; overflow: auto; }
+    .sidebar { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; }
+    h1, h2 { margin: 0 0 .6rem; font-size: 1rem; letter-spacing: .04em; text-transform: uppercase; }
+    h1 { color: #9ccb9c; }
+    canvas { display: block; width: min(80vw, 720px); height: auto; aspect-ratio: 1; image-rendering: pixelated; background: #0a110d; border: 1px solid #4b5a4f; }
+    pre { max-height: none; flex: 1; min-height: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; line-height: 1.35; background: #0e1711; border: 1px solid #4b5a4f; padding: .5rem; }
+    .meta { color: #aebcad; border-top: 1px solid #4b5a4f; border-bottom: 1px solid #4b5a4f; padding: .35rem 0; margin-bottom: .6rem; font-size: .78rem; overflow-wrap: anywhere; }
+    .controls { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .6rem; }
+    button { background: #18221b; color: #c7d0c3; border: 1px solid #718271; border-radius: 0; padding: .35rem .6rem; font: inherit; cursor: pointer; }
+    button:hover, button:focus { background: #2a3a2d; }
+    label { display: block; margin: .6rem 0 .2rem; color: #aebcad; font-size: .75rem; text-transform: uppercase; }
+    select { width: 100%; background: #0e1711; color: #c7d0c3; border: 1px solid #4b5a4f; border-radius: 0; padding: .35rem; font: inherit; }
+    input[type="range"] { width: 100%; accent-color: #9ccb70; }
+    .inspector { min-width: 0; line-height: 1.45; overflow-wrap: anywhere; word-break: break-word; }
+    .inspector table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .inspector th, .inspector td { border-bottom: 1px solid #3f4d43; padding: .25rem .15rem; text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+    .inspector th { width: 36%; color: #aebcad; font-weight: normal; }
     .inspector code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
-    .selected { outline: 2px solid #fbbf24; }
-    @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+    .legend { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: .55rem; color: #aebcad; font-size: .72rem; }
+    .legend span::before { content: ""; display: inline-block; width: .7rem; height: .7rem; margin-right: .25rem; vertical-align: -.05rem; border: 1px solid #718271; background: var(--swatch); }
+    .sidebar > section { height: 100%; min-height: 0; overflow: auto; }
+    .events-panel { grid-column: 1 / -1; grid-row: 2; display: flex; flex-direction: column; min-height: 0; }
+    @media (max-width: 900px) {
+      main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(360px, 1fr) minmax(260px, auto); height: auto; min-height: calc(100vh - 1.5rem); overflow: visible; }
+      .map-panel { grid-column: 1; grid-row: 1; }
+      .sidebar { grid-column: 1; grid-row: 2; }
+      .events-panel { grid-column: 1; grid-row: 3; }
+    }
+    @media (max-width: 650px) {
+      main { display: flex; flex-direction: column; height: auto; min-height: 0; overflow: visible; }
+      .map-panel { order: 1; }
+      .sidebar { order: 2; min-height: 360px; }
+      .events-panel { order: 3; min-height: 320px; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <section>
+    <section class="map-panel">
       <h1>Artificial Ecology</h1>
       <div class="meta" id="meta">Loading…</div>
       <div class="controls">
         <button onclick="control('start')">Start</button>
         <button onclick="control('stop')">Stop</button>
         <button onclick="control('reset')">Reset</button>
+      </div>
+      <div class="legend">
+        <span style="--swatch:#275b4c">inhabitant</span>
+        <span style="--swatch:#8a9fbd">water</span>
+        <span style="--swatch:#87965a">food</span>
+        <span style="--swatch:#777b73">obstacle</span>
       </div>
       <label for="run-select">Recorded run</label>
       <select id="run-select" onchange="selectRun(this.value)">
@@ -61,7 +87,13 @@ INDEX_HTML = """<!doctype html>
       </div>
       <canvas id="map" width="600" height="600"></canvas>
     </section>
+    <aside class="sidebar">
     <section>
+      <h2>Inhabitant</h2>
+      <div class="inspector" id="inspector">Click an inhabitant to inspect them.</div>
+    </section>
+    </aside>
+    <section class="events-panel">
       <h2>Recent events</h2>
       <label for="event-filter">Event type</label>
       <select id="event-filter" onchange="draw(lastState)">
@@ -73,15 +105,11 @@ INDEX_HTML = """<!doctype html>
       </select>
       <pre id="events">Loading…</pre>
     </section>
-    <section>
-      <h2>Inhabitant</h2>
-      <div class="inspector" id="inspector">Click an inhabitant to inspect them.</div>
-    </section>
   </main>
   <script>
     const canvas = document.getElementById('map');
     const context = canvas.getContext('2d');
-    const colors = { water: '#2563eb', food: '#16a34a', obstacle: '#4b5563', inhabitant: '#f59e0b' };
+    const colors = { water: '#547fa7', food: '#849b58', obstacle: '#4f5a51', inhabitant: '#9ccb70' };
     let lastState = null;
     let selectedId = null;
     let selectedRun = 'live';
@@ -108,7 +136,7 @@ INDEX_HTML = """<!doctype html>
         inspector.textContent = 'Click an inhabitant to inspect them.';
         return;
       }
-      inspector.innerHTML = `<strong>${inhabitant.name}</strong><br>Status: ${inhabitant.alive ? 'alive' : 'dead'}<br>Position: (${inhabitant.position.x}, ${inhabitant.position.y})<br>Hunger: ${inhabitant.hunger}<br>Thirst: ${inhabitant.thirst}<br>Fatigue: ${inhabitant.fatigue}<br>Messages: ${inhabitant.received_messages.length}<br>Memories: ${inhabitant.memories.length}<br>Beliefs: ${Object.keys(inhabitant.beliefs).length}<br>Desires:<code>${JSON.stringify(inhabitant.desires, null, 2)}</code>Plan:<code>${JSON.stringify(inhabitant.current_plan, null, 2)}</code>Last decision:<code>${JSON.stringify(inhabitant.last_decision, null, 2)}</code>`;
+      inspector.innerHTML = `<table><tr><th>NAME</th><td>${inhabitant.name}</td></tr><tr><th>ID</th><td>${inhabitant.id}</td></tr><tr><th>STATUS</th><td>${inhabitant.alive ? 'alive' : 'dead'}</td></tr><tr><th>POSITION</th><td>(${inhabitant.position.x}, ${inhabitant.position.y})</td></tr><tr><th>HUNGER</th><td>${inhabitant.hunger}</td></tr><tr><th>THIRST</th><td>${inhabitant.thirst}</td></tr><tr><th>FATIGUE</th><td>${inhabitant.fatigue}</td></tr><tr><th>MESSAGES</th><td>${inhabitant.received_messages.length}</td></tr><tr><th>MEMORIES</th><td>${inhabitant.memories.length}</td></tr><tr><th>BELIEFS</th><td>${Object.keys(inhabitant.beliefs).length}</td></tr><tr><th>DESIRES</th><td><code>${JSON.stringify(inhabitant.desires, null, 2)}</code></td></tr><tr><th>PLAN</th><td><code>${JSON.stringify(inhabitant.current_plan, null, 2)}</code></td></tr><tr><th>LAST DECISION</th><td><code>${JSON.stringify(inhabitant.last_decision, null, 2)}</code></td></tr></table>`;
     }
 
     function draw(state) {
@@ -139,7 +167,7 @@ INDEX_HTML = """<!doctype html>
       }
       const alive = Object.values(world.inhabitants).filter(inhabitant => inhabitant.alive).length;
       const food = world.food.reduce((total, item) => total + item.quantity, 0);
-      document.getElementById('meta').textContent = `Status: ${state.status} · Tick ${world.tick} · ${alive}/${Object.keys(world.inhabitants).length} alive · Food: ${food} · Water sources: ${world.water.length}`;
+      document.getElementById('meta').textContent = `RUN ${state.run_id || 'live'} | STATUS ${state.status} | TICK ${world.tick} | ALIVE ${alive}/${Object.keys(world.inhabitants).length} | FOOD ${food} | WATER ${world.water.length}`;
       updateFilters(state);
       const eventType = document.getElementById('event-filter').value;
       const inhabitantId = document.getElementById('inhabitant-filter').value;
@@ -149,8 +177,13 @@ INDEX_HTML = """<!doctype html>
         const matchesInhabitant = inhabitantId === 'all' || actorId === inhabitantId;
         return matchesType && matchesInhabitant;
       });
-      document.getElementById('events').textContent = events.map(event => JSON.stringify(event)).join('\\n');
+      document.getElementById('events').textContent = events.map(formatEvent).join('\\n');
       drawInspector(state);
+    }
+
+    function formatEvent(event) {
+      const payload = Object.entries(event.payload).map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`).join(' ');
+      return `[${String(event.sequence).padStart(6, '0')}] TICK ${String(event.tick).padStart(4, '0')} ${event.event_type.toUpperCase()}\\n  ${payload}`;
     }
 
     async function control(action) {
@@ -235,6 +268,7 @@ class ObserverView:
         engine = self.target.engine if isinstance(self.target, SimulationSession) else self.target
         status = self.target.status if isinstance(self.target, SimulationSession) else ("extinct" if engine.is_extinct else "stopped")
         return {
+            "run_id": self.current_run_id() if self.current_run_id is not None else None,
             "status": status,
             "error": self.target.error if isinstance(self.target, SimulationSession) else None,
             "world": engine.world.to_dict(),
@@ -251,7 +285,7 @@ class ObserverView:
         if snapshot is None:
             return None
         events = [event.to_dict() for event in self.store.events_for_run(run_id) if event.tick <= tick]
-        return {"status": "replay", "error": None, "world": snapshot["world"], "events": events}
+        return {"run_id": run_id, "status": "replay", "error": None, "world": snapshot["world"], "events": events}
 
 
 def create_server(

@@ -180,7 +180,12 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertIn("event-filter", INDEX_HTML)
         self.assertIn("inspector", INDEX_HTML)
         self.assertIn("overflow-wrap: anywhere", INDEX_HTML)
-        self.assertIn("minmax(0, 280px)", INDEX_HTML)
+        self.assertIn("minmax(320px, 380px)", INDEX_HTML)
+        self.assertIn('class="map-panel"', INDEX_HTML)
+        self.assertIn('class="sidebar"', INDEX_HTML)
+        self.assertIn('class="events-panel"', INDEX_HTML)
+        self.assertIn("grid-column: 1 / -1", INDEX_HTML)
+        self.assertIn("color-scheme: dark", INDEX_HTML)
 
     def test_observer_serves_ui_and_state_api(self) -> None:
         try:
