@@ -48,7 +48,7 @@ Action proposals are resolved with a seeded, per-tick ordering or an explicit sy
 
 The initial model adapter uses Ollama and `gemma4:e2b`. The runtime uses one shared loaded model with separate inhabitant contexts. Initial inference is serialized until measurements justify parallel requests.
 
-The LLM receives observations, selected memories, active desires, current plans, and descriptions of the inhabitant’s capabilities. It does not receive hidden world facts revealed by current action legality. The engine validates proposals against authoritative state and exposes results through later observations.
+The LLM receives a compact physical observation, selected memories, active desires, current plans, recent action results, and descriptions of the inhabitant’s capabilities. Private cognition is supplied through the decision context rather than duplicated inside the physical self-observation. Action descriptions state observable consequences and constraints, including need urgency, adjacent movement, occupied cells, resource requirements, and failed-action evidence. It does not receive hidden world facts revealed by current action legality. The engine validates proposals against authoritative state and exposes results through later observations.
 
 The initial cognition runtime records these distinctions explicitly:
 
@@ -57,6 +57,8 @@ The initial cognition runtime records these distinctions explicitly:
 - plans contain a requested action, lifecycle status, creation tick, and result event;
 - decisions retain desires, beliefs, and retrieved memory identifiers as decision context;
 - failed actions can revise a local belief without changing world truth.
+
+Ollama calls are recorded with the model name, complete request context, response or error, and outcome. The initial local controller disables thinking and bounds output because the inhabitant decision is a small structured action request. Transport failures pause the session and remain explicit records; they are not silently represented as successful decisions. The observer publishes the last completed world state and decision progress while inference is running. The observer demo uses the scripted controller by default and can be run with `AE_CONTROLLER=ollama` for a local-model experiment. In WSL, it uses the Windows Ollama endpoint at `http://172.30.96.1:11434` unless `OLLAMA_BASE_URL` overrides it.
 
 These are baseline structures, not claims that inhabitants reason correctly. Later work should add noisy recall, belief revision, richer retrieval, and multi-step plans while preserving the distinction between interpretation and authoritative state.
 

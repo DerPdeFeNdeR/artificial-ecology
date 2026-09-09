@@ -6,13 +6,13 @@ Artificial Ecology is an open-ended artificial ecology for studying how autonomo
 
 ## Current stage
 
-Architecture and documentation are established. Implementation has not started.
+The deterministic engine, SQLite persistence, replay, browser observer, cognition records, and local Ollama adapter are implemented. The current focus is making model-assisted runs fast, observable, and reproducible before adding richer world mechanics.
 
 Selected initial stack:
 
 - Python simulation engine
 - SQLite persistence
-- Ollama with `gemma4:e2b` for inhabitant decisions
+- Ollama with `gemma4:e2b` for inhabitant decisions. In WSL, the Windows Ollama server is reached through `http://172.30.96.1:11434`; override with `OLLAMA_BASE_URL` when needed.
 - Browser observer, with Godot deferred
 
 ## Important distinction

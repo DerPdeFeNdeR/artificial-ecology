@@ -66,7 +66,8 @@ The first milestone should demonstrate that:
 - model request completion order does not determine conflict outcomes;
 - an inhabitant cannot consume a resource twice;
 - hidden world information does not enter an inhabitant’s observation;
-- model unavailability produces an explicit recorded infrastructure failure;
+- model requests, responses, and unavailability produce explicit recorded model-call outcomes;
+- observer state remains available during model inference;
 - memory or communication changes later behavior in repeatable scenarios.
 
 ## Baseline observer run: scripted survival demo

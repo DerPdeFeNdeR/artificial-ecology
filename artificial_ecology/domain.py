@@ -24,6 +24,8 @@ class ActionProposal:
     target: Position | None = None
     recipient_id: str | None = None
     message: str | None = None
+    decision_source: str = "controller"
+    plan_id: str | None = None
 
     @classmethod
     def move(cls, actor_id: str, target: Position) -> "ActionProposal":
@@ -52,6 +54,8 @@ class ActionProposal:
             "target": {"x": self.target.x, "y": self.target.y} if self.target else None,
             "recipient_id": self.recipient_id,
             "message": self.message,
+            "decision_source": self.decision_source,
+            "plan_id": self.plan_id,
         }
 
 
@@ -71,6 +75,14 @@ class Inhabitant:
     current_plan: list[dict[str, Any]] = field(default_factory=list)
     last_decision: dict[str, Any] | None = None
     perception_history: list[dict[str, Any]] = field(default_factory=list)
+    instincts: dict[str, float] = field(default_factory=lambda: {
+        "exploration": 1.0,
+        "danger_avoidance": 1.0,
+        "persistence": 0.5,
+        "social_curiosity": 0.5,
+    })
+    no_action_streak: int = 0
+    spatial_memory: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def increase_needs(self) -> None:
         if not self.alive:
@@ -101,6 +113,9 @@ class Inhabitant:
             "current_plan": list(self.current_plan),
             "last_decision": self.last_decision,
             "perception_history": list(self.perception_history),
+            "instincts": dict(self.instincts),
+            "no_action_streak": self.no_action_streak,
+            "spatial_memory": dict(self.spatial_memory),
         }
 
     @classmethod
@@ -121,6 +136,14 @@ class Inhabitant:
             current_plan=list(data.get("current_plan", [])),
             last_decision=data.get("last_decision"),
             perception_history=list(data.get("perception_history", [])),
+            instincts=dict(data.get("instincts", {
+                "exploration": 1.0,
+                "danger_avoidance": 1.0,
+                "persistence": 0.5,
+                "social_curiosity": 0.5,
+            })),
+            no_action_streak=data.get("no_action_streak", 0),
+            spatial_memory=dict(data.get("spatial_memory", {})),
         )
 
 

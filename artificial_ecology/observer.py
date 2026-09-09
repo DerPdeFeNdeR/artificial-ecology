@@ -190,7 +190,11 @@ INDEX_HTML = """<!doctype html>
       }
       const alive = Object.values(world.inhabitants).filter(inhabitant => inhabitant.alive).length;
       const food = world.food.reduce((total, item) => total + item.quantity, 0);
-      document.getElementById('meta').textContent = `RUN ${state.run_id || 'live'} | STATUS ${state.status} | TICK ${world.tick} | ALIVE ${alive}/${Object.keys(world.inhabitants).length} | FOOD ${food} | WATER ${world.water.length}`;
+      const progress = state.decision_progress && state.decision_progress.total
+        ? ` | DECISIONS ${state.decision_progress.completed}/${state.decision_progress.total}`
+        : '';
+      const error = state.error ? ` | ERROR ${state.error}` : '';
+      document.getElementById('meta').textContent = `RUN ${state.run_id || 'live'} | STATUS ${state.status} | TICK ${world.tick} | ALIVE ${alive}/${Object.keys(world.inhabitants).length} | FOOD ${food} | WATER ${world.water.length}${progress}${error}`;
       updateFilters(state);
       const eventType = document.getElementById('event-filter').value;
       const inhabitantId = document.getElementById('inhabitant-filter').value;
@@ -299,6 +303,10 @@ class ObserverView:
         self.recent_event_limit = recent_event_limit
 
     def state(self) -> dict[str, Any]:
+        if isinstance(self.target, SimulationSession):
+            state = self.target.observer_state(self.recent_event_limit)
+            state["run_id"] = self.current_run_id() if self.current_run_id is not None else None
+            return state
         engine = self.target.engine if isinstance(self.target, SimulationSession) else self.target
         status = self.target.status if isinstance(self.target, SimulationSession) else ("extinct" if engine.is_extinct else "stopped")
         return {
@@ -307,6 +315,7 @@ class ObserverView:
             "error": self.target.error if isinstance(self.target, SimulationSession) else None,
             "world": engine.world.to_dict(),
             "events": [event.to_dict() for event in engine.events[-self.recent_event_limit:]],
+            "decision_progress": {"tick": engine.world.tick, "completed": 0, "total": 0},
         }
 
     def runs(self) -> list[dict[str, Any]]:

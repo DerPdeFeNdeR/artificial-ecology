@@ -23,6 +23,8 @@ def _proposal_to_dict(proposal: ActionProposal) -> dict[str, Any]:
         ),
         "recipient_id": proposal.recipient_id,
         "message": proposal.message,
+        "decision_source": proposal.decision_source,
+        "plan_id": proposal.plan_id,
     }
 
 
@@ -34,6 +36,8 @@ def _proposal_from_dict(data: dict[str, Any]) -> ActionProposal:
         target=Position(target["x"], target["y"]) if target else None,
         recipient_id=data.get("recipient_id"),
         message=data.get("message"),
+        decision_source=data.get("decision_source", "controller"),
+        plan_id=data.get("plan_id"),
     )
 
 
@@ -65,6 +69,16 @@ class SQLiteStore:
                 actor_id TEXT NOT NULL,
                 proposal_json TEXT NOT NULL,
                 PRIMARY KEY (run_id, tick, actor_id)
+            );
+            CREATE TABLE IF NOT EXISTS model_calls (
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                tick INTEGER NOT NULL,
+                call_index INTEGER NOT NULL,
+                inhabitant_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                call_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, tick, call_index)
             );
             CREATE TABLE IF NOT EXISTS snapshots (
                 run_id TEXT NOT NULL REFERENCES runs(run_id),
@@ -98,9 +112,11 @@ class SQLiteStore:
         engine: SimulationEngine,
         events: Iterable[Event],
         proposals: Iterable[ActionProposal] = (),
+        model_calls: Iterable[dict[str, Any]] = (),
     ) -> None:
         events = tuple(events)
         proposals = tuple(proposals)
+        model_calls = tuple(model_calls)
         with self._lock, self.connection:
             self.connection.executemany(
                 "INSERT INTO events (sequence, run_id, tick, event_type, payload_json) VALUES (?, ?, ?, ?, ?)",
@@ -120,6 +136,29 @@ class SQLiteStore:
                     for proposal in proposals
                 ],
             )
+            self.connection.executemany(
+                "INSERT OR REPLACE INTO model_calls (run_id, tick, call_index, inhabitant_id, model, outcome, call_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        engine.world.tick,
+                        index,
+                        call["inhabitant_id"],
+                        call["model"],
+                        call["outcome"],
+                        json.dumps(call, sort_keys=True),
+                    )
+                    for index, call in enumerate(model_calls)
+                ],
+            )
+
+    def model_calls_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT call_json FROM model_calls WHERE run_id = ? ORDER BY tick, call_index",
+                (run_id,),
+            )
+            return [json.loads(row["call_json"]) for row in rows]
 
     def events_for_run(self, run_id: str) -> list[Event]:
         with self._lock:

@@ -6,6 +6,7 @@ import base64
 import json
 import pickle
 import random
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -83,6 +84,7 @@ class SimulationEngine:
         visible_inhabitants = []
         visible_food = []
         visible_water = []
+        visible_obstacles = []
 
         for other in sorted(self.world.inhabitants.values(), key=lambda item: item.id):
             if not other.alive or inhabitant.position.distance_to(other.position) > radius:
@@ -101,12 +103,26 @@ class SimulationEngine:
             if inhabitant.position.distance_to(position) <= radius:
                 visible_water.append({"x": position.x, "y": position.y})
 
+        for position in sorted(self.world.obstacles):
+            if inhabitant.position.distance_to(position) <= radius:
+                visible_obstacles.append({"x": position.x, "y": position.y})
+
         return {
             "tick": self.world.tick,
-            "self": inhabitant.to_dict(),
+            "self": {
+                "id": inhabitant.id,
+                "name": inhabitant.name,
+                "position": {"x": inhabitant.position.x, "y": inhabitant.position.y},
+                "hunger": inhabitant.hunger,
+                "thirst": inhabitant.thirst,
+                "fatigue": inhabitant.fatigue,
+                "alive": inhabitant.alive,
+                "received_messages": list(inhabitant.received_messages[-20:]),
+            },
             "visible_inhabitants": visible_inhabitants,
             "visible_food": visible_food,
             "visible_water": visible_water,
+            "visible_obstacles": visible_obstacles,
         }
 
     def snapshot(self) -> dict[str, Any]:
@@ -196,17 +212,23 @@ class SimulationEngine:
             return self._action_failed(proposal, "recipient_unavailable")
         if actor.position.distance_to(recipient.position) > 5:
             return self._action_failed(proposal, "recipient_out_of_range")
+        if not re.fullmatch(r"sig-[a-z0-9-]{2,24}", proposal.message):
+            return self._action_failed(proposal, "invalid_signal")
 
         message = {
             "sender_id": actor.id,
             "tick": self.world.tick,
+            "signal": proposal.message,
             "content": proposal.message,
+            "interpretation": None,
+            "interpretation_confidence": 0.0,
         }
         recipient.received_messages.append(message)
         return self._action_succeeded(proposal, {
             "recipient_id": recipient.id,
             "sender_position": {"x": actor.position.x, "y": actor.position.y},
             "channel": "speech",
+            "signal": proposal.message,
             "message": proposal.message,
         }, event_type="message_delivered")
 
@@ -214,6 +236,8 @@ class SimulationEngine:
         return self._emit(event_type, {
             "actor_id": proposal.actor_id,
             "action_type": proposal.action_type,
+            "decision_source": proposal.decision_source,
+            "plan_id": proposal.plan_id,
             **details,
         })
 
@@ -221,6 +245,8 @@ class SimulationEngine:
         return self._emit("action_failed", {
             "actor_id": proposal.actor_id,
             "action_type": proposal.action_type,
+            "decision_source": proposal.decision_source,
+            "plan_id": proposal.plan_id,
             "reason": reason,
         })
 

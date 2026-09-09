@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 from .domain import ActionProposal, Inhabitant, Position, World
 from .engine import SimulationEngine
 from .observer import create_server
 from .persistence import SQLiteStore
-from .runtime import SimulationSession
+from .runtime import OllamaConfig, OllamaController, SimulationSession
 
 
 class DemoController:
@@ -80,20 +81,41 @@ def main() -> None:
     Path("runs").mkdir(exist_ok=True)
     run_id = {"value": datetime.now(timezone.utc).strftime("demo-%Y%m%dT%H%M%S%fZ")}
     store = SQLiteStore(Path("runs") / "demo.sqlite3")
+    use_ollama = os.environ.get("AE_CONTROLLER", "scripted").lower() == "ollama"
+    ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://172.30.96.1:11434")
+    fast_mode = os.environ.get("AE_FAST_MODE", "0").lower() in {"1", "true", "yes"}
+    tick_interval = float(os.environ.get("AE_TICK_INTERVAL", "0" if fast_mode else "1"))
+    max_decision_workers = int(os.environ.get("AE_MAX_DECISION_WORKERS", "5"))
+
     def create_recorded_engine():
         engine = create_demo_engine()
         run_id["value"] = datetime.now(timezone.utc).strftime("demo-%Y%m%dT%H%M%S%fZ")
-        store.create_run(run_id["value"], seed=11, metadata={"scenario": "scripted_observer_demo"})
+        store.create_run(run_id["value"], seed=11, metadata={
+            "scenario": "observer_demo",
+            "controller": "ollama" if use_ollama else "scripted",
+            "ollama_base_url": ollama_base_url if use_ollama else None,
+            "ollama_think": False if use_ollama else None,
+            "ollama_max_output_tokens": 128 if use_ollama else None,
+            "ollama_temperature": 0 if use_ollama else None,
+            "ollama_top_p": 0.95 if use_ollama else None,
+            "ollama_top_k": 64 if use_ollama else None,
+            "ollama_keep_alive": -1 if use_ollama else None,
+            "max_decision_workers": max_decision_workers,
+            "fast_mode": fast_mode,
+            "tick_interval": tick_interval,
+        })
         store.save_initial_snapshot(run_id["value"], engine)
         return engine
 
     def record_tick(engine, result):
-        store.save_tick(run_id["value"], engine, result.events, result.proposals)
+        store.save_tick(run_id["value"], engine, result.events, result.proposals, result.model_calls)
 
     session = SimulationSession(
         create_recorded_engine,
-        DemoController,
+        (lambda: OllamaController(OllamaConfig(base_url=ollama_base_url))) if use_ollama else DemoController,
+        tick_interval=tick_interval,
         on_tick=record_tick,
+        max_decision_workers=max_decision_workers,
     )
     server = create_server(session, store=store, current_run_id=lambda: run_id["value"])
     print("Observer available at http://127.0.0.1:8000")
