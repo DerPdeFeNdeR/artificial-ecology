@@ -42,6 +42,9 @@ INDEX_HTML = """<!doctype html>
     .inspector th, .inspector td { border-bottom: 1px solid #3f4d43; padding: .25rem .15rem; text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
     .inspector th { width: 36%; color: #aebcad; font-weight: normal; }
     .inspector code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+    .inspector-tabs { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: .5rem; }
+    .inspector-tabs button { font-size: .72rem; padding: .25rem .45rem; }
+    .inspector-tabs button.active { background: #2a3a2d; color: #9ccb70; }
     .legend { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: .55rem; color: #aebcad; font-size: .72rem; }
     .legend span::before { content: ""; display: inline-block; width: .7rem; height: .7rem; margin-right: .25rem; vertical-align: -.05rem; border: 1px solid #718271; background: var(--swatch); }
     .sidebar > section { height: 100%; min-height: 0; overflow: auto; }
@@ -90,6 +93,12 @@ INDEX_HTML = """<!doctype html>
     <aside class="sidebar">
     <section>
       <h2>Inhabitant</h2>
+      <div class="inspector-tabs" role="tablist">
+        <button class="active" data-inspector-view="summary" role="tab">Summary</button>
+        <button data-inspector-view="memories" role="tab">Memories</button>
+        <button data-inspector-view="beliefs" role="tab">Beliefs</button>
+        <button data-inspector-view="decisions" role="tab">Decisions</button>
+      </div>
       <div class="inspector" id="inspector">Click an inhabitant to inspect them.</div>
     </section>
     </aside>
@@ -112,6 +121,7 @@ INDEX_HTML = """<!doctype html>
     const colors = { water: '#547fa7', food: '#849b58', obstacle: '#4f5a51', inhabitant: '#9ccb70' };
     let lastState = null;
     let selectedId = null;
+    let inspectorView = 'summary';
     let selectedRun = 'live';
     let selectedTick = 0;
 
@@ -136,7 +146,18 @@ INDEX_HTML = """<!doctype html>
         inspector.textContent = 'Click an inhabitant to inspect them.';
         return;
       }
-      inspector.innerHTML = `<table><tr><th>NAME</th><td>${inhabitant.name}</td></tr><tr><th>ID</th><td>${inhabitant.id}</td></tr><tr><th>STATUS</th><td>${inhabitant.alive ? 'alive' : 'dead'}</td></tr><tr><th>POSITION</th><td>(${inhabitant.position.x}, ${inhabitant.position.y})</td></tr><tr><th>HUNGER</th><td>${inhabitant.hunger}</td></tr><tr><th>THIRST</th><td>${inhabitant.thirst}</td></tr><tr><th>FATIGUE</th><td>${inhabitant.fatigue}</td></tr><tr><th>MESSAGES</th><td>${inhabitant.received_messages.length}</td></tr><tr><th>MEMORIES</th><td>${inhabitant.memories.length}</td></tr><tr><th>BELIEFS</th><td>${Object.keys(inhabitant.beliefs).length}</td></tr><tr><th>DESIRES</th><td><code>${JSON.stringify(inhabitant.desires, null, 2)}</code></td></tr><tr><th>PLAN</th><td><code>${JSON.stringify(inhabitant.current_plan, null, 2)}</code></td></tr><tr><th>LAST DECISION</th><td><code>${JSON.stringify(inhabitant.last_decision, null, 2)}</code></td></tr></table>`;
+      if (inspectorView === 'summary') {
+        inspector.innerHTML = `<table><tr><th>NAME</th><td>${inhabitant.name}</td></tr><tr><th>ID</th><td>${inhabitant.id}</td></tr><tr><th>STATUS</th><td>${inhabitant.alive ? 'alive' : 'dead'}</td></tr><tr><th>POSITION</th><td>(${inhabitant.position.x}, ${inhabitant.position.y})</td></tr><tr><th>HUNGER</th><td>${inhabitant.hunger}</td></tr><tr><th>THIRST</th><td>${inhabitant.thirst}</td></tr><tr><th>FATIGUE</th><td>${inhabitant.fatigue}</td></tr><tr><th>MESSAGES</th><td>${inhabitant.received_messages.length}</td></tr><tr><th>MEMORIES</th><td>${inhabitant.memories.length}</td></tr><tr><th>BELIEFS</th><td>${Object.keys(inhabitant.beliefs).length}</td></tr></table>`;
+      } else if (inspectorView === 'memories') {
+        inspector.innerHTML = `<code>${JSON.stringify(inhabitant.memories, null, 2) || 'No memories recorded.'}</code>`;
+      } else if (inspectorView === 'beliefs') {
+        inspector.innerHTML = Object.keys(inhabitant.beliefs).length
+          ? `<code>${JSON.stringify(inhabitant.beliefs, null, 2)}</code>`
+          : 'No beliefs recorded.';
+      } else {
+        inspector.innerHTML = `<table><tr><th>DESIRES</th><td><code>${JSON.stringify(inhabitant.desires, null, 2)}</code></td></tr><tr><th>PLAN</th><td><code>${JSON.stringify(inhabitant.current_plan, null, 2)}</code></td></tr><tr><th>LAST DECISION</th><td><code>${JSON.stringify(inhabitant.last_decision, null, 2)}</code></td></tr></table>`;
+      }
+      document.querySelectorAll('[data-inspector-view]').forEach(button => button.classList.toggle('active', button.dataset.inspectorView === inspectorView));
     }
 
     function draw(state) {
@@ -248,6 +269,13 @@ INDEX_HTML = """<!doctype html>
       const inhabitant = Object.values(lastState.world.inhabitants).find(item => item.alive && item.position.x === x && item.position.y === y);
       selectedId = inhabitant ? inhabitant.id : null;
       draw(lastState);
+    });
+    document.querySelectorAll('[data-inspector-view]').forEach(button => {
+      button.addEventListener('click', () => {
+        if (!lastState) return;
+        inspectorView = button.dataset.inspectorView;
+        draw(lastState);
+      });
     });
     loadRuns();
     refresh();
