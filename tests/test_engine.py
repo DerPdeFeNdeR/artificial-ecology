@@ -7,7 +7,7 @@ from pathlib import Path
 from artificial_ecology.domain import ActionProposal, Inhabitant, Position, World
 from artificial_ecology.engine import SimulationEngine
 from artificial_ecology.persistence import SQLiteStore, verify_replay
-from artificial_ecology.observer import ObserverView
+from artificial_ecology.observer import INDEX_HTML, ObserverView
 from artificial_ecology.runtime import OllamaController, ScriptedController, SimulationRunner, SimulationSession
 
 
@@ -162,6 +162,13 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(state["world"]["tick"], 1)
         self.assertEqual(len(state["events"]), 1)
         self.assertEqual(engine.world.inhabitants["a"].hunger, 0)
+
+    def test_observer_includes_inspection_and_lifecycle_controls(self) -> None:
+        self.assertIn("Start", INDEX_HTML)
+        self.assertIn("Stop", INDEX_HTML)
+        self.assertIn("Reset", INDEX_HTML)
+        self.assertIn("event-filter", INDEX_HTML)
+        self.assertIn("inspector", INDEX_HTML)
 
 
 if __name__ == "__main__":
