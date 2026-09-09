@@ -22,8 +22,8 @@ INDEX_HTML = """<!doctype html>
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; }
     body { margin: 0; background: #111827; color: #e5e7eb; }
-    main { display: grid; grid-template-columns: minmax(420px, 1fr) 360px 280px; gap: 1rem; min-height: 100vh; padding: 1rem; box-sizing: border-box; }
-    section { background: #1f2937; border: 1px solid #374151; border-radius: .6rem; padding: 1rem; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px) minmax(0, 280px); gap: 1rem; min-height: 100vh; padding: 1rem; box-sizing: border-box; }
+    section { min-width: 0; background: #1f2937; border: 1px solid #374151; border-radius: .6rem; padding: 1rem; }
     h1, h2 { margin-top: 0; }
     canvas { display: block; width: min(80vw, 720px); height: min(80vw, 720px); image-rendering: pixelated; background: #0f172a; border: 1px solid #4b5563; }
     pre { max-height: 55vh; overflow: auto; white-space: pre-wrap; font-size: .8rem; }
@@ -34,7 +34,8 @@ INDEX_HTML = """<!doctype html>
     label { display: block; margin: .75rem 0 .25rem; color: #9ca3af; font-size: .85rem; }
     select { width: 100%; background: #111827; color: #e5e7eb; border: 1px solid #4b5563; border-radius: .35rem; padding: .4rem; }
     input[type="range"] { width: 100%; }
-    .inspector { line-height: 1.6; }
+    .inspector { min-width: 0; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }
+    .inspector code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
     .selected { outline: 2px solid #fbbf24; }
     @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   </style>
@@ -107,7 +108,7 @@ INDEX_HTML = """<!doctype html>
         inspector.textContent = 'Click an inhabitant to inspect them.';
         return;
       }
-      inspector.innerHTML = `<strong>${inhabitant.name}</strong><br>Status: ${inhabitant.alive ? 'alive' : 'dead'}<br>Position: (${inhabitant.position.x}, ${inhabitant.position.y})<br>Hunger: ${inhabitant.hunger}<br>Thirst: ${inhabitant.thirst}<br>Fatigue: ${inhabitant.fatigue}<br>Messages: ${inhabitant.received_messages.length}`;
+      inspector.innerHTML = `<strong>${inhabitant.name}</strong><br>Status: ${inhabitant.alive ? 'alive' : 'dead'}<br>Position: (${inhabitant.position.x}, ${inhabitant.position.y})<br>Hunger: ${inhabitant.hunger}<br>Thirst: ${inhabitant.thirst}<br>Fatigue: ${inhabitant.fatigue}<br>Messages: ${inhabitant.received_messages.length}<br>Memories: ${inhabitant.memories.length}<br>Beliefs: ${Object.keys(inhabitant.beliefs).length}<br>Desires:<code>${JSON.stringify(inhabitant.desires, null, 2)}</code>Plan:<code>${JSON.stringify(inhabitant.current_plan, null, 2)}</code>Last decision:<code>${JSON.stringify(inhabitant.last_decision, null, 2)}</code>`;
     }
 
     function draw(state) {

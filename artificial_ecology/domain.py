@@ -45,6 +45,15 @@ class ActionProposal:
     def speak(cls, actor_id: str, recipient_id: str, message: str) -> "ActionProposal":
         return cls(actor_id, "speak", recipient_id=recipient_id, message=message)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "actor_id": self.actor_id,
+            "action_type": self.action_type,
+            "target": {"x": self.target.x, "y": self.target.y} if self.target else None,
+            "recipient_id": self.recipient_id,
+            "message": self.message,
+        }
+
 
 @dataclass(slots=True)
 class Inhabitant:
@@ -56,6 +65,12 @@ class Inhabitant:
     fatigue: int = 0
     alive: bool = True
     received_messages: list[dict[str, Any]] = field(default_factory=list)
+    memories: list[dict[str, Any]] = field(default_factory=list)
+    beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    desires: dict[str, int] = field(default_factory=dict)
+    current_plan: list[dict[str, Any]] = field(default_factory=list)
+    last_decision: dict[str, Any] | None = None
+    perception_history: list[dict[str, Any]] = field(default_factory=list)
 
     def increase_needs(self) -> None:
         if not self.alive:
@@ -80,6 +95,12 @@ class Inhabitant:
             "fatigue": self.fatigue,
             "alive": self.alive,
             "received_messages": list(self.received_messages),
+            "memories": list(self.memories),
+            "beliefs": dict(self.beliefs),
+            "desires": dict(self.desires),
+            "current_plan": list(self.current_plan),
+            "last_decision": self.last_decision,
+            "perception_history": list(self.perception_history),
         }
 
     @classmethod
@@ -94,6 +115,12 @@ class Inhabitant:
             fatigue=data["fatigue"],
             alive=data["alive"],
             received_messages=list(data.get("received_messages", [])),
+            memories=list(data.get("memories", [])),
+            beliefs=dict(data.get("beliefs", {})),
+            desires=dict(data.get("desires", {})),
+            current_plan=list(data.get("current_plan", [])),
+            last_decision=data.get("last_decision"),
+            perception_history=list(data.get("perception_history", [])),
         )
 
 

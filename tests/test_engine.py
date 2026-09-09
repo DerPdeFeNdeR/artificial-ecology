@@ -1,13 +1,16 @@
 import sqlite3
 import tempfile
 import time
+import json
+import threading
+from urllib.request import urlopen
 import unittest
 from pathlib import Path
 
 from artificial_ecology.domain import ActionProposal, Inhabitant, Position, World
 from artificial_ecology.engine import SimulationEngine
 from artificial_ecology.persistence import SQLiteStore, verify_replay
-from artificial_ecology.observer import INDEX_HTML, ObserverView
+from artificial_ecology.observer import INDEX_HTML, ObserverView, create_server
 from artificial_ecology.runtime import OllamaController, ScriptedController, SimulationRunner, SimulationSession
 
 
@@ -35,6 +38,12 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(result.tick, 1)
         self.assertEqual(result.perceptions["a"]["tick"], 1)
         self.assertEqual(result.events[-1].event_type, "action_succeeded")
+        inhabitant = engine.world.inhabitants["a"]
+        self.assertEqual(inhabitant.desires["reduce_hunger"], 1)
+        self.assertEqual(inhabitant.last_decision["action_type"], "eat")
+        self.assertEqual(inhabitant.current_plan[0]["action_type"], "eat")
+        self.assertEqual(inhabitant.memories[-1]["type"], "action_result")
+        self.assertEqual(len(inhabitant.perception_history), 1)
 
     def test_session_start_stop_and_reset(self) -> None:
         session = SimulationSession(make_engine, lambda: ScriptedController(), tick_interval=0.01)
@@ -170,6 +179,30 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertIn("Reset", INDEX_HTML)
         self.assertIn("event-filter", INDEX_HTML)
         self.assertIn("inspector", INDEX_HTML)
+        self.assertIn("overflow-wrap: anywhere", INDEX_HTML)
+        self.assertIn("minmax(0, 280px)", INDEX_HTML)
+
+    def test_observer_serves_ui_and_state_api(self) -> None:
+        try:
+            server = create_server(make_engine(), port=0)
+        except PermissionError:
+            self.skipTest("socket creation is restricted in this environment")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with urlopen(f"{base_url}/", timeout=2) as response:
+                html = response.read().decode("utf-8")
+            with urlopen(f"{base_url}/api/state", timeout=2) as response:
+                state = json.loads(response.read())
+
+            self.assertIn("Start", html)
+            self.assertIn("inspector", html)
+            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["world"]["tick"], 0)
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

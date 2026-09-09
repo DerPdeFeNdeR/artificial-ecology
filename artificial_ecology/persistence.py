@@ -224,10 +224,17 @@ def verify_replay(store: SQLiteStore, run_id: str) -> SimulationEngine:
         events_by_tick.setdefault(event.tick, []).append(event)
 
     decisions = store.decisions_for_run(run_id)
+    from .runtime import ScriptedController, SimulationRunner
+
+    controller = ScriptedController({
+        tick: {proposal.actor_id: proposal for proposal in proposals}
+        for tick, proposals in decisions.items()
+    })
+    runner = SimulationRunner(engine, controller)
     for tick in store.ticks_for_run(run_id):
         if tick == engine.world.tick:
             continue
-        replayed = engine.step(decisions.get(tick, ()))
+        replayed = runner.run_tick().events
         expected = tuple(events_by_tick.get(tick, ()))
         if [event.to_dict() for event in replayed] != [event.to_dict() for event in expected]:
             raise ReplayMismatch(f"Replay diverged at tick {tick}")

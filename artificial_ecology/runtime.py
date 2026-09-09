@@ -44,17 +44,48 @@ class SimulationRunner:
                 continue
             perception = self.engine.perceive(inhabitant_id)
             perceptions[inhabitant_id] = perception
+            inhabitant.desires = self._desires_for(inhabitant)
+            inhabitant.perception_history.append({
+                "tick": perception["tick"],
+                "visible_inhabitants": [item["id"] for item in perception["visible_inhabitants"]],
+                "visible_food": len(perception["visible_food"]),
+                "visible_water": len(perception["visible_water"]),
+            })
+            inhabitant.perception_history = inhabitant.perception_history[-20:]
+            self._remember(inhabitant, "perception", inhabitant.perception_history[-1])
             proposal = self.controller.decide(inhabitant_id, perception)
+            inhabitant.last_decision = proposal.to_dict() if proposal is not None else {
+                "actor_id": inhabitant_id,
+                "action_type": "none",
+            }
+            inhabitant.current_plan = [inhabitant.last_decision] if proposal is not None else []
             if proposal is not None:
                 proposals.append(proposal)
 
         action_events = self.engine.resolve(proposals)
+        for event in action_events:
+            actor_id = event.payload.get("actor_id")
+            if actor_id in self.engine.world.inhabitants:
+                self._remember(self.engine.world.inhabitants[actor_id], "action_result", event.to_dict())
         return TickResult(
             tick=self.engine.world.tick,
             perceptions=perceptions,
             proposals=tuple(proposals),
             events=tuple(environmental_events) + action_events,
         )
+
+    @staticmethod
+    def _desires_for(inhabitant: Any) -> dict[str, int]:
+        return {
+            "reduce_hunger": inhabitant.hunger,
+            "reduce_thirst": inhabitant.thirst,
+            "reduce_fatigue": inhabitant.fatigue,
+        }
+
+    @staticmethod
+    def _remember(inhabitant: Any, memory_type: str, content: dict[str, Any]) -> None:
+        inhabitant.memories.append({"tick": content.get("tick"), "type": memory_type, "content": content})
+        inhabitant.memories = inhabitant.memories[-100:]
 
 
 class SimulationSession:

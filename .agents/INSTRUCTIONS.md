@@ -42,3 +42,22 @@ Clean code is not code with the fewest lines. Prefer readability, cohesion, test
 - When a change affects a runnable application, offer the user an opportunity to run and review it before committing.
 - If the user agrees, run the application and wait for their review before committing.
 - If the user declines or the change is non-interactive, continue with verification and commit normally.
+
+## UI testing
+
+- Important UI features require automated coverage for their API behavior and rendered controls.
+- Check responsive layout, text wrapping, overflow, and panel readability for visual changes.
+- Use browser automation when available; otherwise test the served HTML and HTTP behavior directly.
+- Offer a live application review before committing visual changes.
+
+## UX and visual design
+
+- Make the current state, available actions, and important outcomes obvious.
+- Use clear hierarchy, consistent controls, readable labels, and predictable interaction patterns.
+- Keep related information together and reveal secondary detail progressively.
+- Provide visible feedback for loading, running, stopped, completed, and error states.
+- Preserve user control: make start, stop, reset, navigation, and recovery actions clear.
+- Design for narrow screens and long content; prevent clipping, overlap, horizontal overflow, and unreadable dense text.
+- Prefer accessible contrast, keyboard-usable controls, meaningful labels, and status text that does not rely on color alone.
+- Treat observer data as evidence: distinguish world state, inhabitant interpretation, and post-run analysis visually.
+- Favor simple, calm interfaces over decoration; every visual element should support understanding or action.
