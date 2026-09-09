@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .engine import SimulationEngine
+from .runtime import SimulationSession
 
 
 INDEX_HTML = """<!doctype html>
@@ -26,6 +27,9 @@ INDEX_HTML = """<!doctype html>
     canvas { display: block; width: min(80vw, 720px); height: min(80vw, 720px); image-rendering: pixelated; background: #0f172a; border: 1px solid #4b5563; }
     pre { max-height: 70vh; overflow: auto; white-space: pre-wrap; font-size: .8rem; }
     .meta { color: #9ca3af; margin-bottom: 1rem; }
+    .controls { display: flex; gap: .5rem; margin-bottom: 1rem; }
+    button { background: #374151; color: #e5e7eb; border: 1px solid #6b7280; border-radius: .35rem; padding: .45rem .8rem; cursor: pointer; }
+    button:hover { background: #4b5563; }
     @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -34,6 +38,11 @@ INDEX_HTML = """<!doctype html>
     <section>
       <h1>Artificial Ecology</h1>
       <div class="meta" id="meta">Loading…</div>
+      <div class="controls">
+        <button onclick="control('start')">Start</button>
+        <button onclick="control('stop')">Stop</button>
+        <button onclick="control('reset')">Reset</button>
+      </div>
       <canvas id="map" width="600" height="600"></canvas>
     </section>
     <section>
@@ -70,8 +79,14 @@ INDEX_HTML = """<!doctype html>
         context.arc((inhabitant.position.x + .5) * cell, (inhabitant.position.y + .5) * cell, cell * .3, 0, Math.PI * 2);
         context.fill();
       }
-      document.getElementById('meta').textContent = `Tick ${world.tick} · ${Object.keys(world.inhabitants).length} inhabitants`;
+      const alive = Object.values(world.inhabitants).filter(inhabitant => inhabitant.alive).length;
+      document.getElementById('meta').textContent = `Status: ${state.status} · Tick ${world.tick} · ${alive}/${Object.keys(world.inhabitants).length} alive`;
       document.getElementById('events').textContent = state.events.map(event => JSON.stringify(event)).join('\\n');
+    }
+
+    async function control(action) {
+      await fetch('/api/control', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action}) });
+      await refresh();
     }
 
     async function refresh() {
@@ -86,19 +101,23 @@ INDEX_HTML = """<!doctype html>
 
 
 class ObserverView:
-    def __init__(self, engine: SimulationEngine, recent_event_limit: int = 100) -> None:
-        self.engine = engine
+    def __init__(self, target: SimulationEngine | SimulationSession, recent_event_limit: int = 100) -> None:
+        self.target = target
         self.recent_event_limit = recent_event_limit
 
     def state(self) -> dict[str, Any]:
+        engine = self.target.engine if isinstance(self.target, SimulationSession) else self.target
+        status = self.target.status if isinstance(self.target, SimulationSession) else ("extinct" if engine.is_extinct else "stopped")
         return {
-            "world": self.engine.world.to_dict(),
-            "events": [event.to_dict() for event in self.engine.events[-self.recent_event_limit:]],
+            "status": status,
+            "error": self.target.error if isinstance(self.target, SimulationSession) else None,
+            "world": engine.world.to_dict(),
+            "events": [event.to_dict() for event in engine.events[-self.recent_event_limit:]],
         }
 
 
-def create_server(engine: SimulationEngine, host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:
-    view = ObserverView(engine)
+def create_server(target: SimulationEngine | SimulationSession, host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:
+    view = ObserverView(target)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
@@ -110,6 +129,29 @@ def create_server(engine: SimulationEngine, host: str = "127.0.0.1", port: int =
                 self._send(HTTPStatus.OK, "application/json", payload)
             else:
                 self._send(HTTPStatus.NOT_FOUND, "application/json", b'{"error":"not found"}')
+
+        def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+            if urlparse(self.path).path != "/api/control" or not isinstance(target, SimulationSession):
+                self._send(HTTPStatus.NOT_FOUND, "application/json", b'{"error":"not found"}')
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                action = json.loads(self.rfile.read(length)).get("action")
+                if action == "start":
+                    changed = target.start()
+                elif action == "stop":
+                    changed = target.stop()
+                elif action == "reset":
+                    target.reset()
+                    changed = True
+                else:
+                    self._send(HTTPStatus.BAD_REQUEST, "application/json", b'{"error":"unknown action"}')
+                    return
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self._send(HTTPStatus.BAD_REQUEST, "application/json", b'{"error":"invalid request"}')
+                return
+            payload = json.dumps({"changed": changed, "status": target.status}).encode("utf-8")
+            self._send(HTTPStatus.OK, "application/json", payload)
 
         def _send(self, status: HTTPStatus, content_type: str, body: bytes) -> None:
             self.send_response(status)

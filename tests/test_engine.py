@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from artificial_ecology.domain import ActionProposal, Inhabitant, Position, Worl
 from artificial_ecology.engine import SimulationEngine
 from artificial_ecology.persistence import SQLiteStore, verify_replay
 from artificial_ecology.observer import ObserverView
-from artificial_ecology.runtime import OllamaController, ScriptedController, SimulationRunner
+from artificial_ecology.runtime import OllamaController, ScriptedController, SimulationRunner, SimulationSession
 
 
 def make_engine(seed: int = 7) -> SimulationEngine:
@@ -34,6 +35,25 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(result.tick, 1)
         self.assertEqual(result.perceptions["a"]["tick"], 1)
         self.assertEqual(result.events[-1].event_type, "action_succeeded")
+
+    def test_session_start_stop_and_reset(self) -> None:
+        session = SimulationSession(make_engine, lambda: ScriptedController(), tick_interval=0.01)
+
+        self.assertEqual(session.status, "stopped")
+        self.assertTrue(session.start())
+        deadline = time.monotonic() + 1
+        while session.engine.world.tick == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertGreater(session.engine.world.tick, 0)
+        self.assertTrue(session.stop())
+        stopped_tick = session.engine.world.tick
+        time.sleep(0.03)
+        self.assertEqual(session.engine.world.tick, stopped_tick)
+
+        session.reset()
+
+        self.assertEqual(session.status, "stopped")
+        self.assertEqual(session.engine.world.tick, 0)
 
     def test_valid_move_changes_world_and_emits_event(self) -> None:
         engine = make_engine()

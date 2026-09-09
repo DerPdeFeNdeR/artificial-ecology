@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from urllib import request
@@ -53,6 +55,90 @@ class SimulationRunner:
             proposals=tuple(proposals),
             events=tuple(environmental_events) + action_events,
         )
+
+
+class SimulationSession:
+    """Owns the controllable lifecycle around a simulation runner."""
+
+    def __init__(
+        self,
+        engine_factory: Callable[[], SimulationEngine],
+        controller_factory: Callable[[], DecisionController],
+        tick_interval: float = 1.0,
+        on_tick: Callable[[SimulationEngine, TickResult], None] | None = None,
+        on_reset: Callable[[SimulationEngine], None] | None = None,
+    ) -> None:
+        self._engine_factory = engine_factory
+        self._controller_factory = controller_factory
+        self._tick_interval = tick_interval
+        self._on_tick = on_tick
+        self._on_reset = on_reset
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.engine = engine_factory()
+        self._runner = SimulationRunner(self.engine, controller_factory())
+        self._status = "stopped"
+        self._error: str | None = None
+
+    @property
+    def status(self) -> str:
+        with self._lock:
+            return self._status
+
+    @property
+    def error(self) -> str | None:
+        with self._lock:
+            return self._error
+
+    def start(self) -> bool:
+        with self._lock:
+            if self._status == "running":
+                return False
+            if self.engine.is_extinct:
+                return False
+            self._stop_event.clear()
+            self._error = None
+            self._status = "running"
+            self._thread = threading.Thread(target=self._run, name="simulation", daemon=True)
+            self._thread.start()
+            return True
+
+    def stop(self) -> bool:
+        with self._lock:
+            if self._status != "running":
+                return False
+            self._status = "stopped"
+            self._stop_event.set()
+            return True
+
+    def reset(self) -> None:
+        self.stop()
+        with self._lock:
+            self.engine = self._engine_factory()
+            self._runner = SimulationRunner(self.engine, self._controller_factory())
+            self._status = "stopped"
+            self._error = None
+            if self._on_reset is not None:
+                self._on_reset(self.engine)
+
+    def _run(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                with self._lock:
+                    if self._status != "running":
+                        return
+                    result = self._runner.run_tick()
+                    if self._on_tick is not None:
+                        self._on_tick(self.engine, result)
+                    if self.engine.is_extinct:
+                        self._status = "extinct"
+                        return
+                time.sleep(self._tick_interval)
+        except Exception as error:  # surface infrastructure failures to the observer
+            with self._lock:
+                self._error = str(error)
+                self._status = "error"
 
 
 class ScriptedController:

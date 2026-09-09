@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -38,7 +39,8 @@ def _proposal_from_dict(data: dict[str, Any]) -> ActionProposal:
 
 class SQLiteStore:
     def __init__(self, path: str | Path) -> None:
-        self.connection = sqlite3.connect(path)
+        self._lock = threading.RLock()
+        self.connection = sqlite3.connect(path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
@@ -75,18 +77,20 @@ class SQLiteStore:
         self.connection.commit()
 
     def create_run(self, run_id: str, seed: int, metadata: dict[str, Any] | None = None) -> None:
-        self.connection.execute(
-            "INSERT INTO runs (run_id, seed, metadata_json) VALUES (?, ?, ?)",
-            (run_id, seed, json.dumps(metadata or {}, sort_keys=True)),
-        )
-        self.connection.commit()
+        with self._lock:
+            self.connection.execute(
+                "INSERT INTO runs (run_id, seed, metadata_json) VALUES (?, ?, ?)",
+                (run_id, seed, json.dumps(metadata or {}, sort_keys=True)),
+            )
+            self.connection.commit()
 
     def save_initial_snapshot(self, run_id: str, engine: SimulationEngine) -> None:
-        self.connection.execute(
-            "INSERT OR REPLACE INTO snapshots (run_id, tick, state_json) VALUES (?, ?, ?)",
-            (run_id, engine.world.tick, engine.snapshot_json()),
-        )
-        self.connection.commit()
+        with self._lock:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO snapshots (run_id, tick, state_json) VALUES (?, ?, ?)",
+                (run_id, engine.world.tick, engine.snapshot_json()),
+            )
+            self.connection.commit()
 
     def save_tick(
         self,
@@ -97,7 +101,7 @@ class SQLiteStore:
     ) -> None:
         events = tuple(events)
         proposals = tuple(proposals)
-        with self.connection:
+        with self._lock, self.connection:
             self.connection.executemany(
                 "INSERT INTO events (sequence, run_id, tick, event_type, payload_json) VALUES (?, ?, ?, ?, ?)",
                 [
@@ -118,48 +122,54 @@ class SQLiteStore:
             )
 
     def events_for_run(self, run_id: str) -> list[Event]:
-        rows = self.connection.execute(
-            "SELECT sequence, tick, event_type, payload_json FROM events WHERE run_id = ? ORDER BY sequence",
-            (run_id,),
-        )
-        return [
-            Event(row["sequence"], row["tick"], row["event_type"], json.loads(row["payload_json"]))
-            for row in rows
-        ]
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT sequence, tick, event_type, payload_json FROM events WHERE run_id = ? ORDER BY sequence",
+                (run_id,),
+            )
+            return [
+                Event(row["sequence"], row["tick"], row["event_type"], json.loads(row["payload_json"]))
+                for row in rows
+            ]
 
     def latest_snapshot(self, run_id: str) -> dict[str, Any] | None:
-        row = self.connection.execute(
-            "SELECT state_json FROM snapshots WHERE run_id = ? ORDER BY tick DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-        return json.loads(row["state_json"]) if row else None
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT state_json FROM snapshots WHERE run_id = ? ORDER BY tick DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            return json.loads(row["state_json"]) if row else None
 
     def initial_snapshot(self, run_id: str) -> dict[str, Any] | None:
-        row = self.connection.execute(
-            "SELECT state_json FROM snapshots WHERE run_id = ? ORDER BY tick ASC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-        return json.loads(row["state_json"]) if row else None
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT state_json FROM snapshots WHERE run_id = ? ORDER BY tick ASC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            return json.loads(row["state_json"]) if row else None
 
     def decisions_for_run(self, run_id: str) -> dict[int, tuple[ActionProposal, ...]]:
-        rows = self.connection.execute(
-            "SELECT tick, proposal_json FROM decisions WHERE run_id = ? ORDER BY tick, actor_id",
-            (run_id,),
-        )
-        decisions: dict[int, list[ActionProposal]] = {}
-        for row in rows:
-            decisions.setdefault(row["tick"], []).append(_proposal_from_dict(json.loads(row["proposal_json"])))
-        return {tick: tuple(proposals) for tick, proposals in decisions.items()}
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT tick, proposal_json FROM decisions WHERE run_id = ? ORDER BY tick, actor_id",
+                (run_id,),
+            )
+            decisions: dict[int, list[ActionProposal]] = {}
+            for row in rows:
+                decisions.setdefault(row["tick"], []).append(_proposal_from_dict(json.loads(row["proposal_json"])))
+            return {tick: tuple(proposals) for tick, proposals in decisions.items()}
 
     def ticks_for_run(self, run_id: str) -> list[int]:
-        rows = self.connection.execute(
-            "SELECT tick FROM snapshots WHERE run_id = ? ORDER BY tick",
-            (run_id,),
-        )
-        return [row["tick"] for row in rows]
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT tick FROM snapshots WHERE run_id = ? ORDER BY tick",
+                (run_id,),
+            )
+            return [row["tick"] for row in rows]
 
     def close(self) -> None:
-        self.connection.close()
+        with self._lock:
+            self.connection.close()
 
 
 class ReplayMismatch(AssertionError):
