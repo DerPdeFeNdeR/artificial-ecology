@@ -17,3 +17,7 @@ artifacts/
 .DS_Store
 .vscode/
 .idea/
+
+# Browser test dependencies and artifacts
+node_modules/
+test-results/

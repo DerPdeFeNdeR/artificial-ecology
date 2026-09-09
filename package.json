@@ -1,0 +1,10 @@
+{
+  "name": "artificial-ecology-ui-tests",
+  "private": true,
+  "scripts": {
+    "test:ui": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest"
+  }
+}

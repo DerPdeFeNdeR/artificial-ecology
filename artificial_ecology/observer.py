@@ -142,26 +142,28 @@ INDEX_HTML = """<!doctype html>
     function draw(state) {
       const world = state.world;
       const cell = Math.min(canvas.width / world.width, canvas.height / world.height);
+      const offsetX = (canvas.width - world.width * cell) / 2;
+      const offsetY = (canvas.height - world.height * cell) / 2;
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.strokeStyle = '#263244';
       for (let x = 0; x <= world.width; x++) {
-        context.beginPath(); context.moveTo(x * cell, 0); context.lineTo(x * cell, world.height * cell); context.stroke();
+        context.beginPath(); context.moveTo(offsetX + x * cell, offsetY); context.lineTo(offsetX + x * cell, offsetY + world.height * cell); context.stroke();
       }
       for (let y = 0; y <= world.height; y++) {
-        context.beginPath(); context.moveTo(0, y * cell); context.lineTo(world.width * cell, y * cell); context.stroke();
+        context.beginPath(); context.moveTo(offsetX, offsetY + y * cell); context.lineTo(offsetX + world.width * cell, offsetY + y * cell); context.stroke();
       }
       context.fillStyle = colors.obstacle;
-      for (const position of world.obstacles) context.fillRect(position.x * cell, position.y * cell, cell, cell);
+      for (const position of world.obstacles) context.fillRect(offsetX + position.x * cell, offsetY + position.y * cell, cell, cell);
       context.fillStyle = colors.water;
-      for (const position of world.water) context.fillRect(position.x * cell + cell * .2, position.y * cell + cell * .2, cell * .6, cell * .6);
+      for (const position of world.water) context.fillRect(offsetX + position.x * cell + cell * .2, offsetY + position.y * cell + cell * .2, cell * .6, cell * .6);
       context.fillStyle = colors.food;
-      for (const item of world.food) if (item.quantity > 0) context.fillRect(item.position.x * cell + cell * .3, item.position.y * cell + cell * .3, cell * .4, cell * .4);
+      for (const item of world.food) if (item.quantity > 0) context.fillRect(offsetX + item.position.x * cell + cell * .3, offsetY + item.position.y * cell + cell * .3, cell * .4, cell * .4);
       context.fillStyle = colors.inhabitant;
       for (const inhabitant of Object.values(world.inhabitants)) {
         if (!inhabitant.alive) continue;
         if (inhabitant.id === selectedId) context.fillStyle = '#fef08a';
         context.beginPath();
-        context.arc((inhabitant.position.x + .5) * cell, (inhabitant.position.y + .5) * cell, cell * .3, 0, Math.PI * 2);
+        context.arc(offsetX + (inhabitant.position.x + .5) * cell, offsetY + (inhabitant.position.y + .5) * cell, cell * .3, 0, Math.PI * 2);
         context.fill();
         context.fillStyle = colors.inhabitant;
       }
@@ -237,8 +239,12 @@ INDEX_HTML = """<!doctype html>
       if (!lastState) return;
       const rect = canvas.getBoundingClientRect();
       const cell = Math.min(canvas.width / lastState.world.width, canvas.height / lastState.world.height);
-      const x = Math.floor((event.clientX - rect.left) * canvas.width / rect.width / cell);
-      const y = Math.floor((event.clientY - rect.top) * canvas.height / rect.height / cell);
+      const offsetX = (canvas.width - lastState.world.width * cell) / 2;
+      const offsetY = (canvas.height - lastState.world.height * cell) / 2;
+      const canvasX = (event.clientX - rect.left) * canvas.width / rect.width - offsetX;
+      const canvasY = (event.clientY - rect.top) * canvas.height / rect.height - offsetY;
+      const x = Math.floor(canvasX / cell);
+      const y = Math.floor(canvasY / cell);
       const inhabitant = Object.values(lastState.world.inhabitants).find(item => item.alive && item.position.x === x && item.position.y === y);
       selectedId = inhabitant ? inhabitant.id : null;
       draw(lastState);
