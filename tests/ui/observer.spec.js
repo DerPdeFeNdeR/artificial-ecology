@@ -50,6 +50,40 @@ test.describe('observer layout and controls', () => {
 
     await page.getByRole('button', { name: 'Stop' }).click();
     await expect(page.locator('#meta')).toContainText('STATUS stopped');
+
+    const eventsBounds = await page.locator('.events-panel').boundingBox();
+    expect(eventsBounds.y + eventsBounds.height).toBeLessThanOrEqual(900);
+  });
+
+  test('reset returns the live simulation to its initial state', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: 'Start' }).click();
+    await expect.poll(() => tick(page)).toContain('TICK 1');
+    await page.getByRole('button', { name: 'Reset' }).click();
+
+    await expect(page.locator('#meta')).toContainText('STATUS stopped');
+    await expect(page.locator('#meta')).toContainText('TICK 0');
+  });
+
+  test('replay selection and event filtering work', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+
+    const runSelect = page.locator('#run-select');
+    await expect.poll(() => runSelect.locator('option').count()).toBeGreaterThan(1);
+    await runSelect.selectOption({ index: 1 });
+    await expect(page.locator('#meta')).toContainText('STATUS replay');
+    await expect(page.locator('#replay-controls')).toBeVisible();
+
+    await runSelect.selectOption('live');
+    await page.getByRole('button', { name: 'Start' }).click();
+    await expect.poll(() => tick(page)).toContain('TICK 1');
+    const eventFilter = page.locator('#event-filter');
+    await expect.poll(() => eventFilter.locator('option').count()).toBeGreaterThan(1);
+    await eventFilter.selectOption('action_succeeded');
+    await expect(page.locator('#events')).toContainText('ACTION_SUCCEEDED');
   });
 
   test('narrow layout does not create horizontal overflow', async ({ page }) => {
