@@ -142,6 +142,7 @@ class SimulationEngineTests(unittest.TestCase):
             replayed = verify_replay(store, "run-1")
 
             self.assertEqual(replayed.snapshot(), engine.snapshot())
+            self.assertEqual(store.run_summaries()[0]["last_tick"], 1)
             store.close()
 
     def test_ollama_response_becomes_action_proposal(self) -> None:

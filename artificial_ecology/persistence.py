@@ -167,6 +167,41 @@ class SQLiteStore:
             )
             return [row["tick"] for row in rows]
 
+    def run_summaries(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT runs.run_id, runs.seed, runs.metadata_json,
+                       MIN(snapshots.tick) AS first_tick,
+                       MAX(snapshots.tick) AS last_tick,
+                       COUNT(DISTINCT events.sequence) AS event_count
+                FROM runs
+                LEFT JOIN snapshots ON snapshots.run_id = runs.run_id
+                LEFT JOIN events ON events.run_id = runs.run_id
+                GROUP BY runs.run_id
+                ORDER BY runs.run_id DESC
+                """
+            )
+            return [
+                {
+                    "run_id": row["run_id"],
+                    "seed": row["seed"],
+                    "metadata": json.loads(row["metadata_json"]),
+                    "first_tick": row["first_tick"],
+                    "last_tick": row["last_tick"],
+                    "event_count": row["event_count"],
+                }
+                for row in rows
+            ]
+
+    def snapshot_at(self, run_id: str, tick: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT state_json FROM snapshots WHERE run_id = ? AND tick = ?",
+                (run_id, tick),
+            ).fetchone()
+            return json.loads(row["state_json"]) if row else None
+
     def close(self) -> None:
         with self._lock:
             self.connection.close()

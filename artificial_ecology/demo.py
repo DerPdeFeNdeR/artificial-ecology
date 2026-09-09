@@ -95,7 +95,7 @@ def main() -> None:
         DemoController,
         on_tick=record_tick,
     )
-    server = create_server(session)
+    server = create_server(session, store=store, current_run_id=lambda: run_id["value"])
     print("Observer available at http://127.0.0.1:8000")
     try:
         server.serve_forever()

@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 from .engine import SimulationEngine
+from .persistence import SQLiteStore
 from .runtime import SimulationSession
 
 
@@ -32,6 +33,7 @@ INDEX_HTML = """<!doctype html>
     button:hover { background: #4b5563; }
     label { display: block; margin: .75rem 0 .25rem; color: #9ca3af; font-size: .85rem; }
     select { width: 100%; background: #111827; color: #e5e7eb; border: 1px solid #4b5563; border-radius: .35rem; padding: .4rem; }
+    input[type="range"] { width: 100%; }
     .inspector { line-height: 1.6; }
     .selected { outline: 2px solid #fbbf24; }
     @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
@@ -46,6 +48,15 @@ INDEX_HTML = """<!doctype html>
         <button onclick="control('start')">Start</button>
         <button onclick="control('stop')">Stop</button>
         <button onclick="control('reset')">Reset</button>
+      </div>
+      <label for="run-select">Recorded run</label>
+      <select id="run-select" onchange="selectRun(this.value)">
+        <option value="live">Live simulation</option>
+      </select>
+      <div id="replay-controls" hidden>
+        <label for="tick-slider">Replay tick</label>
+        <input id="tick-slider" type="range" min="0" max="0" value="0" oninput="selectTick(this.value)">
+        <span id="tick-label"></span>
       </div>
       <canvas id="map" width="600" height="600"></canvas>
     </section>
@@ -72,6 +83,8 @@ INDEX_HTML = """<!doctype html>
     const colors = { water: '#2563eb', food: '#16a34a', obstacle: '#4b5563', inhabitant: '#f59e0b' };
     let lastState = null;
     let selectedId = null;
+    let selectedRun = 'live';
+    let selectedTick = 0;
 
     function updateFilters(state) {
       const eventFilter = document.getElementById('event-filter');
@@ -144,8 +157,45 @@ INDEX_HTML = """<!doctype html>
       await refresh();
     }
 
+    async function loadRuns() {
+      const response = await fetch('/api/runs');
+      const runs = await response.json();
+      const select = document.getElementById('run-select');
+      const current = select.value;
+      select.innerHTML = '<option value="live">Live simulation</option>' + runs.map(run => `<option value="${run.run_id}">${run.run_id} · ${run.event_count} events</option>`).join('');
+      select.value = runs.some(run => run.run_id === current) ? current : 'live';
+      updateReplayControls(runs);
+    }
+
+    function updateReplayControls(runs) {
+      const controls = document.getElementById('replay-controls');
+      const run = runs.find(item => item.run_id === selectedRun);
+      controls.hidden = !run;
+      if (run) {
+        const slider = document.getElementById('tick-slider');
+        slider.min = run.first_tick;
+        slider.max = run.last_tick;
+        slider.value = Math.min(Math.max(selectedTick, run.first_tick), run.last_tick);
+        document.getElementById('tick-label').textContent = `Tick ${slider.value} of ${run.last_tick}`;
+      }
+    }
+
+    async function selectRun(runId) {
+      selectedRun = runId;
+      selectedTick = 0;
+      await loadRuns();
+      await refresh();
+    }
+
+    async function selectTick(tick) {
+      selectedTick = Number(tick);
+      document.getElementById('tick-label').textContent = `Tick ${selectedTick}`;
+      await refresh();
+    }
+
     async function refresh() {
-      const response = await fetch('/api/state');
+      const url = selectedRun === 'live' ? '/api/state' : `/api/replay?run_id=${encodeURIComponent(selectedRun)}&tick=${selectedTick}`;
+      const response = await fetch(url);
       lastState = await response.json();
       draw(lastState);
     }
@@ -159,6 +209,7 @@ INDEX_HTML = """<!doctype html>
       selectedId = inhabitant ? inhabitant.id : null;
       draw(lastState);
     });
+    loadRuns();
     refresh();
     setInterval(refresh, 1000);
   </script>
@@ -167,8 +218,16 @@ INDEX_HTML = """<!doctype html>
 
 
 class ObserverView:
-    def __init__(self, target: SimulationEngine | SimulationSession, recent_event_limit: int = 100) -> None:
+    def __init__(
+        self,
+        target: SimulationEngine | SimulationSession,
+        store: SQLiteStore | None = None,
+        current_run_id: Callable[[], str | None] | None = None,
+        recent_event_limit: int = 100,
+    ) -> None:
         self.target = target
+        self.store = store
+        self.current_run_id = current_run_id
         self.recent_event_limit = recent_event_limit
 
     def state(self) -> dict[str, Any]:
@@ -181,9 +240,27 @@ class ObserverView:
             "events": [event.to_dict() for event in engine.events[-self.recent_event_limit:]],
         }
 
+    def runs(self) -> list[dict[str, Any]]:
+        return self.store.run_summaries() if self.store is not None else []
 
-def create_server(target: SimulationEngine | SimulationSession, host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:
-    view = ObserverView(target)
+    def replay(self, run_id: str, tick: int) -> dict[str, Any] | None:
+        if self.store is None:
+            return None
+        snapshot = self.store.snapshot_at(run_id, tick)
+        if snapshot is None:
+            return None
+        events = [event.to_dict() for event in self.store.events_for_run(run_id) if event.tick <= tick]
+        return {"status": "replay", "error": None, "world": snapshot["world"], "events": events}
+
+
+def create_server(
+    target: SimulationEngine | SimulationSession,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    store: SQLiteStore | None = None,
+    current_run_id: Callable[[], str | None] | None = None,
+) -> ThreadingHTTPServer:
+    view = ObserverView(target, store=store, current_run_id=current_run_id)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
@@ -193,6 +270,21 @@ def create_server(target: SimulationEngine | SimulationSession, host: str = "127
             elif path == "/api/state":
                 payload = json.dumps(view.state(), sort_keys=True).encode("utf-8")
                 self._send(HTTPStatus.OK, "application/json", payload)
+            elif path == "/api/runs":
+                payload = json.dumps(view.runs(), sort_keys=True).encode("utf-8")
+                self._send(HTTPStatus.OK, "application/json", payload)
+            elif path == "/api/replay":
+                query = parse_qs(urlparse(self.path).query)
+                run_id = query.get("run_id", [""])[0]
+                try:
+                    tick = int(query.get("tick", ["0"])[0])
+                except ValueError:
+                    tick = -1
+                replay = view.replay(run_id, tick)
+                if replay is None:
+                    self._send(HTTPStatus.NOT_FOUND, "application/json", b'{"error":"replay not found"}')
+                else:
+                    self._send(HTTPStatus.OK, "application/json", json.dumps(replay, sort_keys=True).encode("utf-8"))
             else:
                 self._send(HTTPStatus.NOT_FOUND, "application/json", b'{"error":"not found"}')
 
