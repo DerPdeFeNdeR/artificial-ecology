@@ -41,9 +41,59 @@ class SimulationEngineTests(unittest.TestCase):
         inhabitant = engine.world.inhabitants["a"]
         self.assertEqual(inhabitant.desires["reduce_hunger"], 1)
         self.assertEqual(inhabitant.last_decision["action_type"], "eat")
-        self.assertEqual(inhabitant.current_plan[0]["action_type"], "eat")
+        self.assertEqual(inhabitant.current_plan[0]["request"]["action_type"], "eat")
+        self.assertEqual(inhabitant.current_plan[0]["status"], "succeeded")
         self.assertEqual(inhabitant.memories[-1]["type"], "action_result")
         self.assertEqual(len(inhabitant.perception_history), 1)
+
+    def test_perception_updates_uncertain_beliefs_and_context(self) -> None:
+        contexts = []
+
+        class ContextController:
+            def decide(self, inhabitant_id, perception):
+                contexts.append(perception["cognition"])
+                return None
+
+        engine = make_engine()
+        SimulationRunner(engine, ContextController()).run_tick()
+
+        belief = engine.world.inhabitants["a"].beliefs["food_at:1,1"]
+        self.assertEqual(belief["value"], {"present": True, "quantity": 2})
+        self.assertEqual(belief["source"], "perception")
+        self.assertEqual(belief["confidence"], 0.9)
+        self.assertEqual(contexts[0]["beliefs"]["food_at:1,1"], belief)
+        self.assertEqual(contexts[0]["memories"][0]["type"], "perception")
+
+    def test_failed_action_updates_plan_and_belief(self) -> None:
+        engine = make_engine()
+        controller = ScriptedController({1: {"a": ActionProposal.drink("a")}})
+
+        result = SimulationRunner(engine, controller).run_tick()
+
+        inhabitant = engine.world.inhabitants["a"]
+        self.assertEqual(result.events[-1].event_type, "action_failed")
+        self.assertEqual(inhabitant.current_plan[0]["status"], "failed")
+        self.assertEqual(inhabitant.current_plan[0]["result_event_sequence"], result.events[-1].sequence)
+        self.assertEqual(inhabitant.beliefs["water_at:1,1"]["value"], False)
+
+    def test_retrieved_memories_are_bounded_and_recent(self) -> None:
+        engine = make_engine()
+        inhabitant = engine.world.inhabitants["a"]
+        inhabitant.memories = [
+            {"id": str(index), "tick": index, "type": "test", "content": {"tick": index}}
+            for index in range(20)
+        ]
+        contexts = []
+
+        class ContextController:
+            def decide(self, inhabitant_id, perception):
+                contexts.append(perception["cognition"]["memories"])
+                return None
+
+        SimulationRunner(engine, ContextController()).run_tick()
+
+        self.assertEqual(len(contexts[0]), 8)
+        self.assertEqual(contexts[0][0]["type"], "perception")
 
     def test_session_start_stop_and_reset(self) -> None:
         session = SimulationSession(make_engine, lambda: ScriptedController(), tick_interval=0.01)

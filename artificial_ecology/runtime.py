@@ -45,6 +45,7 @@ class SimulationRunner:
             perception = self.engine.perceive(inhabitant_id)
             perceptions[inhabitant_id] = perception
             inhabitant.desires = self._desires_for(inhabitant)
+            self._update_beliefs(inhabitant, perception)
             inhabitant.perception_history.append({
                 "tick": perception["tick"],
                 "visible_inhabitants": [item["id"] for item in perception["visible_inhabitants"]],
@@ -53,26 +54,111 @@ class SimulationRunner:
             })
             inhabitant.perception_history = inhabitant.perception_history[-20:]
             self._remember(inhabitant, "perception", inhabitant.perception_history[-1])
-            proposal = self.controller.decide(inhabitant_id, perception)
-            inhabitant.last_decision = proposal.to_dict() if proposal is not None else {
-                "actor_id": inhabitant_id,
-                "action_type": "none",
-            }
-            inhabitant.current_plan = [inhabitant.last_decision] if proposal is not None else []
+            decision_context = self._decision_context(inhabitant, perception)
+            decision_perception = {**perception, "cognition": decision_context}
+            proposal = self.controller.decide(inhabitant_id, decision_perception)
+            inhabitant.last_decision = self._decision_record(inhabitant, proposal, decision_context)
+            inhabitant.current_plan = [self._plan_for(inhabitant, proposal)]
+            if proposal is None:
+                inhabitant.current_plan[0]["status"] = "no_action"
             if proposal is not None:
                 proposals.append(proposal)
 
         action_events = self.engine.resolve(proposals)
-        for event in action_events:
-            actor_id = event.payload.get("actor_id")
-            if actor_id in self.engine.world.inhabitants:
-                self._remember(self.engine.world.inhabitants[actor_id], "action_result", event.to_dict())
+        self._record_action_results(action_events)
         return TickResult(
             tick=self.engine.world.tick,
             perceptions=perceptions,
             proposals=tuple(proposals),
             events=tuple(environmental_events) + action_events,
         )
+
+    def _record_action_results(self, events: list[Event] | tuple[Event, ...]) -> None:
+        for event in events:
+            actor_id = event.payload.get("actor_id")
+            inhabitant = self.engine.world.inhabitants.get(actor_id)
+            if inhabitant is None:
+                continue
+            self._remember(inhabitant, "action_result", event.to_dict())
+            self._complete_plan(inhabitant, event)
+            self._learn_from_action(inhabitant, event)
+
+    @staticmethod
+    def _complete_plan(inhabitant: Any, event: Event) -> None:
+        if not inhabitant.current_plan:
+            return
+        plan = inhabitant.current_plan[-1]
+        if plan.get("status") != "pending":
+            return
+        plan["status"] = "succeeded" if event.event_type in {"action_succeeded", "message_delivered"} else "failed"
+        plan["completed_tick"] = event.tick
+        plan["result_event_sequence"] = event.sequence
+
+    @staticmethod
+    def _learn_from_action(inhabitant: Any, event: Event) -> None:
+        reason = event.payload.get("reason")
+        action_type = event.payload.get("action_type")
+        if reason == "no_food_here" and action_type == "eat":
+            SimulationRunner._update_belief(inhabitant, f"food_at:{inhabitant.position.x},{inhabitant.position.y}", False, .95, "failed_action", event.tick)
+        if reason == "no_water_here" and action_type == "drink":
+            SimulationRunner._update_belief(inhabitant, f"water_at:{inhabitant.position.x},{inhabitant.position.y}", False, .95, "failed_action", event.tick)
+
+    @staticmethod
+    def _decision_record(inhabitant: Any, proposal: ActionProposal | None, context: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "actor_id": inhabitant.id,
+            "tick": context["tick"],
+            "action_type": proposal.action_type if proposal is not None else "none",
+            "proposal": proposal.to_dict() if proposal is not None else None,
+            "desires": dict(context["desires"]),
+            "beliefs": dict(context["beliefs"]),
+            "retrieved_memory_ids": [memory["id"] for memory in context["memories"]],
+        }
+
+    @staticmethod
+    def _plan_for(inhabitant: Any, proposal: ActionProposal | None) -> dict[str, Any]:
+        return {
+            "created_tick": inhabitant.perception_history[-1]["tick"],
+            "status": "pending" if proposal is not None else "no_action",
+            "request": proposal.to_dict() if proposal is not None else None,
+        }
+
+    @staticmethod
+    def _decision_context(inhabitant: Any, perception: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "tick": perception["tick"],
+            "desires": dict(inhabitant.desires),
+            "beliefs": dict(inhabitant.beliefs),
+            "memories": SimulationRunner._retrieve_memories(inhabitant, perception),
+            "current_plan": list(inhabitant.current_plan),
+        }
+
+    @staticmethod
+    def _retrieve_memories(inhabitant: Any, perception: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+        memories = list(reversed(inhabitant.memories))
+        selected = memories[:limit]
+        return [dict(memory) for memory in selected]
+
+    @classmethod
+    def _update_beliefs(cls, inhabitant: Any, perception: dict[str, Any]) -> None:
+        tick = perception["tick"]
+        visible_food = {f"food_at:{item['position']['x']},{item['position']['y']}": item for item in perception["visible_food"]}
+        visible_water = {f"water_at:{item['x']},{item['y']}": item for item in perception["visible_water"]}
+        for key, item in visible_food.items():
+            cls._update_belief(inhabitant, key, {"present": True, "quantity": item["quantity"]}, .9, "perception", tick)
+        for key in visible_water:
+            cls._update_belief(inhabitant, key, True, .9, "perception", tick)
+
+    @staticmethod
+    def _update_belief(inhabitant: Any, key: str, value: Any, confidence: float, source: str, tick: int) -> None:
+        previous = inhabitant.beliefs.get(key, {})
+        inhabitant.beliefs[key] = {
+            "value": value,
+            "confidence": confidence,
+            "source": source,
+            "first_observed_tick": previous.get("first_observed_tick", tick),
+            "updated_tick": tick,
+        }
 
     @staticmethod
     def _desires_for(inhabitant: Any) -> dict[str, int]:
@@ -84,7 +170,8 @@ class SimulationRunner:
 
     @staticmethod
     def _remember(inhabitant: Any, memory_type: str, content: dict[str, Any]) -> None:
-        inhabitant.memories.append({"tick": content.get("tick"), "type": memory_type, "content": content})
+        memory_id = f"{inhabitant.id}:{content.get('tick', 0)}:{len(inhabitant.memories) + 1}"
+        inhabitant.memories.append({"id": memory_id, "tick": content.get("tick"), "type": memory_type, "content": content})
         inhabitant.memories = inhabitant.memories[-100:]
 
 

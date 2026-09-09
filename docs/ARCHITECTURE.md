@@ -50,6 +50,16 @@ The initial model adapter uses Ollama and `gemma4:e2b`. The runtime uses one sha
 
 The LLM receives observations, selected memories, active desires, current plans, and descriptions of the inhabitant’s capabilities. It does not receive hidden world facts revealed by current action legality. The engine validates proposals against authoritative state and exposes results through later observations.
 
+The initial cognition runtime records these distinctions explicitly:
+
+- beliefs are keyed claims with a value, confidence, source, and observation ticks;
+- memories have stable run-local identifiers and retrieval is bounded to recent records;
+- plans contain a requested action, lifecycle status, creation tick, and result event;
+- decisions retain desires, beliefs, and retrieved memory identifiers as decision context;
+- failed actions can revise a local belief without changing world truth.
+
+These are baseline structures, not claims that inhabitants reason correctly. Later work should add noisy recall, belief revision, richer retrieval, and multi-step plans while preserving the distinction between interpretation and authoritative state.
+
 ## Persistence and replay
 
 Persist at least:
